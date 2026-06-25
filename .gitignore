@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# PyInstaller
+*.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 敏感文件（含 API Key / Cookie 的探测脚本，不要提交）
+probe.py
+probe_team.py
+test_*.py
+
+# 配置/日志（运行时生成，在 %APPDATA% 里，不会出现在仓库）
+# 但如果有本地副本：
+debug.log
+opencode_debug.html
+
+# OS
+Thumbs.db
+Desktop.ini
