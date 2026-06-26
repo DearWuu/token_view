@@ -266,15 +266,14 @@ class UsageCard(QFrame):
             pct = QLabel(f"{it.used_percent:.0f}%")
             pct.setObjectName("pct")
             pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            pct.setFixedWidth(pct_w)
+            pct.setMinimumWidth(pct_w)
 
             if self._compact:
                 lbl.setStyleSheet(f"color:#cfcfd4;font-size:{lbl_px}px;")
                 pct.setStyleSheet(f"color:{c};font-weight:700;font-size:{pct_px}px;"
                                   "background:rgba(255,255,255,0.05);"
                                   "padding:0 4px;border-radius:4px;")
-                row.addWidget(lbl)
-                row.addStretch()
+                row.addWidget(lbl, 1)
                 row.addWidget(pct)
                 vl.addLayout(row)
             else:
@@ -298,6 +297,7 @@ class UsageCard(QFrame):
                     sub.setObjectName("sub")
                     sub_px = max(8, int(10 * s))
                     sub.setStyleSheet(f"font-size:{sub_px}px;")
+                    sub.setWordWrap(True)
                     vl.addWidget(sub)
 
             self.body.addWidget(wrap)
@@ -315,17 +315,17 @@ class UsageCard(QFrame):
         name_px = max(16, int(19 * s))
         bar_h = max(11, int(14 * s))
         pct_w = max(42, int(50 * s))
-        label_w = max(60, int(72 * s))
-        name_w = max(75, int(90 * s))
+        label_w = max(70, int(85 * s))
+        name_w = max(80, int(100 * s))
         bar_radius = max(4, int(5 * s))
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(int(3 * s))
+        row.setSpacing(int(6 * s))
 
         name_lbl = QLabel(self._name)
         name_lbl.setObjectName("title")
-        name_lbl.setFixedWidth(name_w)
+        name_lbl.setMinimumWidth(name_w)
         name_lbl.setStyleSheet(
             f"font-size:{name_px}px;font-weight:800;color:#f2f2f4;"
         )
@@ -340,7 +340,7 @@ class UsageCard(QFrame):
             c = color_for(it.used_percent)
             lbl = QLabel(it.label)
             lbl.setObjectName("itemlabel")
-            lbl.setFixedWidth(label_w)
+            lbl.setMinimumWidth(label_w)
             lbl.setStyleSheet(
                 f"font-size:{lbl_px}px;font-weight:600;color:#cfcfd4;"
             )
@@ -358,7 +358,7 @@ class UsageCard(QFrame):
             pct = QLabel(f"{it.used_percent:.0f}%")
             pct.setObjectName("pct")
             pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            pct.setFixedWidth(pct_w)
+            pct.setMinimumWidth(pct_w)
             pct.setStyleSheet(
                 f"color:{c};font-weight:800;font-size:{pct_px}px;"
             )

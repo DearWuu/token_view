@@ -336,7 +336,7 @@ class OpenCodeProvider(BaseProvider):
 
     def fetch(self) -> UsageData:
         wsid = (self.cfg.get("workspace_id") or "").strip()
-        name = self.cfg.get("name") or "OpenCode Go"
+        name = self.cfg.get("name") or "OpenCode"
         data = UsageData(provider_name=name, plan_level="Go", fetched_at=time.time())
 
         if self.cfg.get("cdp_enabled", True):
