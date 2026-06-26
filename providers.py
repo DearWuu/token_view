@@ -18,7 +18,7 @@ import requests
 from logger import log
 
 try:
-    import websocket
+    from websocket import create_connection as ws_connect
     HAS_WS = True
 except Exception as _e:
     HAS_WS = False
@@ -195,7 +195,7 @@ class ZhipuProvider(BaseProvider):
 
         # 4) 连 WebSocket 发 Runtime.evaluate
         try:
-            ws = websocket.create_connection(
+            ws = ws_connect(
                 ws_url, timeout=self.CDP_EVAL_TIMEOUT,
                 origin="http://127.0.0.1:" + str(self.cfg.get("cdp_port") or 9222),
             )
@@ -322,71 +322,37 @@ class ZhipuProvider(BaseProvider):
 
 
 class OpenCodeProvider(BaseProvider):
-    """OpenCode Go。无官方用量 API，用 auth cookie 抓 /workspace/{id}/go 页面解析。
+    """OpenCode Go。通过 CDP 在页面上下文获取用量数据。
 
-    多层解析策略（按优先级）：
-      1) 从页面 <script> 里提取 __NEXT_DATA__ 等 JSON 数据
-      2) HTML 语义化提取（progress / SVG 环 / aria-label）
-      3) 纯文本关键词 + 百分比正则（回退）
+    API 返回格式（从 __server 响应解析）：
+    {
+        rollingUsage: {status, resetInSec, usagePercent},
+        weeklyUsage: {status, resetInSec, usagePercent},
+        monthlyUsage: {status, resetInSec, usagePercent}
+    }
     """
 
     URL_FMT = "https://opencode.ai/workspace/{wsid}/go"
 
-    # ---- 公开入口 ----
     def fetch(self) -> UsageData:
         wsid = (self.cfg.get("workspace_id") or "").strip()
         name = self.cfg.get("name") or "OpenCode Go"
         data = UsageData(provider_name=name, plan_level="Go", fetched_at=time.time())
 
+        if self.cfg.get("cdp_enabled", True):
+            return self._fetch_cdp(data)
+
         if not wsid:
             data.status = "error"
             data.error = "未配置 workspace_id"
             return data
-
-        # 优先 CDP：连接用户已登录的调试 Chrome，在页面上下文 fetch HTML
-        if self.cfg.get("cdp_enabled", True):
-            return self._fetch_cdp(data)
-
-        cookie = (self.cfg.get("cookie") or "").strip()
-        if not cookie:
-            data.status = "error"
-            data.error = "未配置 cookie（请在设置里打开 CDP Chrome 并登录 opencode.ai）"
-            return data
-        if "=" not in cookie:
-            cookie = f"auth={cookie}"
-        url = self.URL_FMT.format(wsid=wsid)
-        headers = {"Cookie": cookie, "User-Agent": BROWSER_UA,
-                   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                   "Accept-Language": "en-US,en;q=0.9", "Referer": "https://opencode.ai/"}
-        try:
-            r = requests.get(url, headers=headers, timeout=20)
-        except requests.RequestException as e:
-            data.status, data.error = "error", f"网络错误: {e}"
-            return data
-        if r.status_code >= 400:
-            data.status = "error"
-            data.error = f"HTTP {r.status_code}（cookie 可能已失效，请重新登录）"
-            return data
-        html = r.text
-        log(f"OpenCode fetch: HTTP {r.status_code}, body={len(html)} 字符")
-        items = self._parse_html(html)
-        if items:
-            data.items = items
-        else:
-            data.status = "empty"
-            data.error = "无法解析页面（前端可能改版，请在设置里重新登录）"
-            self._dump_debug(html)
-        log(f"OpenCode 解析: status={data.status}, items={[(i.label, i.used_percent) for i in data.items]}")
+        data.status = "error"
+        data.error = "请启用 CDP 模式"
         return data
 
-    # ---- CDP 模式：连接已登录的调试 Chrome 抓页面 HTML ----
-    CDP_TIMEOUT = 30
-
     def _fetch_cdp(self, data: UsageData) -> UsageData:
-        """通过 CDP 连接用户已登录的 Chrome，在 opencode.ai 页面上下文
-        fetch('/workspace/{wsid}/go') 拿到 HTML，再用多层解析器提取用量。"""
         if not HAS_WS:
-            data.status, data.error = "error", "缺少 websocket-client 依赖（pip install websocket-client）"
+            data.status, data.error = "error", "缺少 websocket-client 依赖"
             return data
 
         cdp_url = (self.cfg.get("cdp_url") or "").strip()
@@ -394,7 +360,6 @@ class OpenCodeProvider(BaseProvider):
             port = int(self.cfg.get("cdp_port") or 9222)
             cdp_url = f"http://127.0.0.1:{port}"
 
-        # 1) GET /json 拿 page target 列表
         try:
             r = requests.get(cdp_url.rstrip("/") + "/json", timeout=5)
             r.raise_for_status()
@@ -410,7 +375,6 @@ class OpenCodeProvider(BaseProvider):
             log(f"OpenCode CDP /json 非 JSON: {e}")
             return data
 
-        # 2) 找一个 url 含 opencode.ai 的 Page target
         page = next(
             (t for t in targets
              if t.get("type") == "page" and "opencode.ai" in (t.get("url") or "")),
@@ -419,28 +383,58 @@ class OpenCodeProvider(BaseProvider):
         if page is None:
             data.status = "error"
             data.error = "请在 CDP Chrome 里打开 opencode.ai 并登录"
-            log(f"OpenCode CDP 未发现 opencode.ai 标签页，现有 target: "
-                f"{[(t.get('type'), (t.get('url') or '')[:60]) for t in targets]}")
+            log(f"OpenCode CDP 未发现 opencode.ai 标签页")
             return data
+
+        # 自动从 URL 提取 workspace_id
+        wsid = (self.cfg.get("workspace_id") or "").strip()
+        if not wsid:
+            page_url = page.get("url") or ""
+            import re
+            m = re.search(r"(wrk_[A-Z0-9]+)", page_url)
+            if m:
+                wsid = m.group(1)
+                log(f"OpenCode 自动获取 workspace_id: {wsid}")
+            else:
+                data.status = "error"
+                data.error = "未配置 workspace_id，且无法从页面 URL 自动获取"
+                return data
 
         ws_url = page.get("webSocketDebuggerUrl")
         if not ws_url:
             data.status, data.error = "error", "CDP target 缺少 webSocketDebuggerUrl"
             return data
 
-        # 3) JS：从登录态页面 fetch workspace 的 HTML
-        wsid = (self.cfg.get("workspace_id") or "").strip()
-        ws_path = self.URL_FMT.format(wsid=wsid).replace("https://opencode.ai", "")
-        js = (
-            "(async()=>{"
-            "const r=await fetch(" + json.dumps(ws_path) + ",{credentials:'include'});"
-            "return await r.text();})()"
-        )
+        # 直接从页面 DOM 读取已显示的用量数据
+        js = """
+        (() => {
+            // 查找页面上显示的百分比数字
+            const texts = document.body.innerText;
+            const results = {};
+            
+            // 匹配 5h/rolling 用量
+            const rollingMatch = texts.match(/5[Hh].*?(\\d+(?:\\.\\d+)?)\\s*%/);
+            if (rollingMatch) results.rolling = parseFloat(rollingMatch[1]);
+            
+            // 匹配 weekly 用量
+            const weeklyMatch = texts.match(/[Ww]eekly.*?(\\d+(?:\\.\\d+)?)\\s*%|周.*?(\\d+(?:\\.\\d+)?)\\s*%/);
+            if (weeklyMatch) results.weekly = parseFloat(weeklyMatch[1] || weeklyMatch[2]);
+            
+            // 匹配 monthly 用量
+            const monthlyMatch = texts.match(/[Mm]onthly.*?(\\d+(?:\\.\\d+)?)\\s*%|月.*?(\\d+(?:\\.\\d+)?)\\s*%/);
+            if (monthlyMatch) results.monthly = parseFloat(monthlyMatch[1] || monthlyMatch[2]);
+            
+            // 匹配所有百分比（通用）
+            const allPcts = [...texts.matchAll(/(\\d+(?:\\.\\d)?)\\s*%/g)].map(m => parseFloat(m[1]));
+            results.allPcts = allPcts;
+            
+            return JSON.stringify(results);
+        })()
+        """
 
-        # 4) 连 WebSocket 发 Runtime.evaluate
         try:
-            ws = websocket.create_connection(
-                ws_url, timeout=self.CDP_TIMEOUT,
+            ws = ws_connect(
+                ws_url, timeout=15,
                 origin="http://127.0.0.1:" + str(self.cfg.get("cdp_port") or 9222),
             )
             ws.send(json.dumps({
@@ -462,205 +456,80 @@ class OpenCodeProvider(BaseProvider):
             data.status, data.error = "error", f"CDP 响应非 JSON: {e}"
             return data
 
-        # 5) 解析结果
         result = resp.get("result", {}).get("result", {})
         if result.get("type") == "undefined" or "value" not in result:
-            exc = resp.get("result", {}).get("exceptionDetails")
-            if exc:
-                msg = (exc.get("exception", {}) or {}).get("description") or exc.get("text")
-                data.status = "error"
-                data.error = f"页面 fetch 失败（登录可能已过期）: {msg}"
-                log(f"OpenCode CDP evaluate 异常: {msg}")
-                return data
             data.status, data.error = "error", "CDP 返回 undefined"
             return data
 
-        html = result.get("value") or ""
-        log(f"OpenCode CDP fetch: HTML {len(html)} 字符")
-        if not html.strip():
-            data.status, data.error = "error", "CDP fetch 返回空（登录可能已失效）"
+        text = result.get("value") or ""
+        log(f"OpenCode CDP 返回: {text[:500]}")
+        if not text.strip():
+            data.status, data.error = "error", "API 返回空"
             return data
 
-        items = self._parse_html(html)
-        if items:
-            data.items = items
+        return self._parse_response(text, data)
+
+    def _parse_response(self, text: str, data: UsageData) -> UsageData:
+        try:
+            j = json.loads(text)
+        except ValueError as e:
+            data.status, data.error = "error", f"JSON 解析失败: {e}"
+            return data
+
+        if j.get("error") == "timeout":
+            data.status = "error"
+            data.error = "获取超时，请确保 opencode.ai 页面已加载完成"
+            return data
+
+        # 处理 DOM 解析结果
+        if "allPcts" in j:
+            pcts = j.get("allPcts", [])
+            rolling = j.get("rolling")
+            weekly = j.get("weekly")
+            monthly = j.get("monthly")
+            
+            if rolling is not None:
+                data.items.append(UsageItem("5h Rolling", rolling))
+            if weekly is not None:
+                data.items.append(UsageItem("每周", weekly))
+            if monthly is not None:
+                data.items.append(UsageItem("每月", monthly))
+            
+            # 如果没有匹配到特定类型，使用通用百分比
+            if not data.items and pcts:
+                for i, pct in enumerate(pcts[:3]):
+                    labels = ["5 hours usage", " weekly usage", " monthly usage"]
+                    data.items.append(UsageItem(labels[i], pct))
+        
+        # 处理 _server API 响应
         else:
+            for key, label in [
+                ("rollingUsage", "5h Rolling"),
+                ("weeklyUsage", "每周"),
+                ("monthlyUsage", "每月"),
+            ]:
+                usage = j.get(key) or {}
+                pct = usage.get("usagePercent")
+                reset_sec = usage.get("resetInSec")
+                if pct is not None:
+                    note = ""
+                    if reset_sec:
+                        h = reset_sec // 3600
+                        m = (reset_sec % 3600) // 60
+                        if h > 24:
+                            note = f"{h // 24}天{h % 24}小时后重置"
+                        elif h > 0:
+                            note = f"{h}小时{m}分后重置"
+                        else:
+                            note = f"{m}分钟后重置"
+                    data.items.append(UsageItem(label, float(pct), note=note))
+
+        if not data.items:
             data.status = "empty"
-            data.error = "无法解析页面（前端可能改版）"
-            self._dump_debug(html)
-        log(f"OpenCode CDP 解析: status={data.status}, items={[(i.label, i.used_percent) for i in data.items]}")
+            data.error = "未找到用量数据，请确保页面显示了用量信息"
+
+        log(f"OpenCode 解析: status={data.status}, items={[(i.label, i.used_percent) for i in data.items]}")
         return data
-    def _parse_html(self, html: str) -> list:
-        # 1) 从 __NEXT_DATA__ / 内嵌 JSON 里找用量数据
-        items = self._parse_embedded_json(html)
-        if items:
-            log("OpenCode 策略1（内嵌JSON）命中")
-            return items
-
-        # 2) HTML 语义化提取：progress 元素、SVG 圆环、data-* 属性
-        items = self._parse_semantic_html(html)
-        if items:
-            log("OpenCode 策略2（HTML语义化）命中")
-            return items
-
-        # 3) 纯文本关键词 + 百分比正则（回退）
-        items = self._parse_text_fallback(html)
-        if items:
-            log("OpenCode 策略3（文本回退）命中")
-        return items
-
-    # ---- 策略 1：内嵌 JSON ----
-    def _parse_embedded_json(self, html: str) -> list:
-        """从 __NEXT_DATA__、<script id="__NEXT_DATA__"> 等标签里提取用量百分比。"""
-        json_patterns = [
-            r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>',
-            r'<script[^>]*type="application/json"[^>]*>(.*?)</script>',
-            r'<script[^>]*id="__NEXT_DATA__"[^>]*/>',
-        ]
-        for pat in json_patterns:
-            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
-            if not m or not m.group(1):
-                continue
-            try:
-                blob = json.loads(m.group(1).strip())
-            except (json.JSONDecodeError, ValueError):
-                continue
-            items = self._scan_json(blob)
-            if items:
-                return items
-
-        # window.__INITIAL_STATE__ / __DATA__ = {...}（需要括号匹配）
-        for js_var in (r"window\.__INITIAL_STATE__", r"window\.__DATA__"):
-            m = re.search(js_var + r"\s*=\s*", html)
-            if m:
-                js = self._extract_json_object(html, m.end())
-                if js:
-                    try:
-                        blob = json.loads(js)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    items = self._scan_json(blob)
-                    if items:
-                        return items
-        return []
-
-    @staticmethod
-    def _extract_json_object(text: str, start_pos: int) -> str:
-        """从 text[start_pos:] 提取第一个完整的 JSON 对象 {...}，支持嵌套。"""
-        i = start_pos
-        while i < len(text) and text[i] != "{":
-            i += 1
-        if i >= len(text):
-            return None
-        brace_start = i
-        depth = 0
-        in_str = False
-        escape = False
-        while i < len(text):
-            c = text[i]
-            if escape:
-                escape = False
-            elif c == "\\" and in_str:
-                escape = True
-            elif c == '"':
-                in_str = not in_str
-            elif not in_str:
-                if c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return text[brace_start: i + 1]
-            i += 1
-        return None
-
-    def _scan_json(self, obj, depth=0) -> list:
-        """递归扫描 JSON，寻找含有 percentage/usage/token 等字段的结构。"""
-        if depth > 20 or obj is None:
-            return []
-        if isinstance(obj, dict):
-            pct = None
-            # 检查是否是一个用量单元
-            for k in ("percentage", "usedPercentage", "usagePercentage", "pct",
-                      "used_percent", "usage_percent"):
-                v = obj.get(k)
-                if isinstance(v, (int, float)):
-                    pct = float(v)
-                    break
-            if pct is not None:
-                label = ""
-                for k in ("label", "name", "title", "type", "window", "period"):
-                    label = obj.get(k, "")
-                    if isinstance(label, str) and label:
-                        break
-                reset = obj.get("resetAt") or obj.get("reset_at") or obj.get("resetIn") or ""
-                reset_str = str(reset) if reset else ""
-                return [UsageItem(label=label or "用量", used_percent=pct,
-                                  note=reset_str if isinstance(reset_str, str) else "")]
-            # 如果当前对象有多条用量数据（如 usage: {5h: {...}, weekly: {...}}）
-            items = []
-            for v in obj.values():
-                items.extend(self._scan_json(v, depth + 1))
-            return items
-        if isinstance(obj, list):
-            items = []
-            for v in obj:
-                items.extend(self._scan_json(v, depth + 1))
-            return items
-        return []
-
-    # ---- 策略 2：HTML 语义化提取 ----
-    def _parse_semantic_html(self, html: str) -> list:
-        """从 progress 元素、SVG 圆环、aria-valuenow 等提取百分比。"""
-        items = []
-
-        # progress 元素：<progress value="45" max="100">
-        for m in re.finditer(
-            r'<progress[^>]*\bvalue\s*=\s*"(\d+(?:\.\d+)?)"[^>]*>',
-            html, re.IGNORECASE,
-        ):
-            pct = float(m.group(1))
-            ctx = self._surrounding_text(html, m.start(), 200)
-            label = self._guess_label(ctx)
-            items.append(UsageItem(label=label, used_percent=pct))
-        if items:
-            return items
-
-        # SVG 环形进度条（stroke-dasharray/stroke-dashoffset）
-        for m in re.finditer(
-            r'stroke-dash(?:array|offset)\s*=\s*"([^"]+)"',
-            html, re.IGNORECASE,
-        ):
-            ctx = self._surrounding_text(html, m.start(), 300)
-            pct = self._svg_stroke_pct(m.group(1), ctx)
-            if pct is not None:
-                label = self._guess_label(ctx)
-                items.append(UsageItem(label=label, used_percent=pct))
-        if items:
-            return items
-
-        # aria-valuenow（常见于无障碍进度条）
-        for m in re.finditer(
-            r'aria-valuenow\s*=\s*"(\d+(?:\.\d+)?)"',
-            html, re.IGNORECASE,
-        ):
-            pct = float(m.group(1))
-            ctx = self._surrounding_text(html, m.start(), 200)
-            label = self._guess_label(ctx)
-            items.append(UsageItem(label=label, used_percent=pct))
-        return items
-
-    @staticmethod
-    def _svg_stroke_pct(attr: str, ctx: str = "") -> float:
-        """尝试从 SVG stroke-dasharray/offset 推导百分比。"""
-        nums = re.findall(r"(\d+(?:\.\d+)?)", attr)
-        if len(nums) >= 2:
-            try:
-                dash, total = float(nums[0]), float(nums[1])
-                if total > 0:
-                    return round((dash / total) * 100, 1)
-            except (ValueError, ZeroDivisionError):
-                pass
         if nums:
             # 尝试从上下文找百分比文字
             m = re.search(r"(\d+(?:\.\d+)?)\s*%", ctx)
@@ -766,10 +635,182 @@ class OpenCodeProvider(BaseProvider):
             pass
 
 
+class MimoProvider(BaseProvider):
+    """小米 MiMo Token Plan。通过 CDP 调用 /api/v1/tokenPlan/usage 获取用量。
+
+    返回格式：
+    {
+      "code": 0,
+      "data": {
+        "monthUsage": {"percent": 0.239, "items": [...]},
+        "usage": {"percent": 0.24, "items": [...]}
+      }
+    }
+    """
+
+    API_PATH = "/api/v1/tokenPlan/usage"
+
+    def fetch(self) -> UsageData:
+        name = self.cfg.get("name") or "小米 MiMo"
+        data = UsageData(provider_name=name, plan_level="Token Plan", fetched_at=time.time())
+
+        if self.cfg.get("cdp_enabled", True):
+            return self._fetch_cdp(data)
+
+        cookie = (self.cfg.get("cookie") or "").strip()
+        if not cookie:
+            data.status = "error"
+            data.error = "未配置 cookie（请在设置里打开 CDP Chrome 并登录 platform.xiaomimimo.com）"
+            return data
+        headers = {"Cookie": cookie, "User-Agent": BROWSER_UA,
+                   "Accept": "application/json", "Referer": "https://platform.xiaomimimo.com/"}
+        try:
+            r = requests.get("https://platform.xiaomimimo.com" + self.API_PATH, headers=headers, timeout=20)
+        except requests.RequestException as e:
+            data.status, data.error = "error", f"网络错误: {e}"
+            return data
+        if r.status_code >= 400:
+            data.status = "error"
+            data.error = f"HTTP {r.status_code}（cookie 可能已失效，请重新登录）"
+            return data
+        log(f"MiMo fetch: HTTP {r.status_code}, body={r.text[:200]}")
+        return self._parse_json(r.text, data)
+
+    def _fetch_cdp(self, data: UsageData) -> UsageData:
+        if not HAS_WS:
+            data.status, data.error = "error", "缺少 websocket-client 依赖（pip install websocket-client）"
+            return data
+
+        cdp_url = (self.cfg.get("cdp_url") or "").strip()
+        if not cdp_url:
+            port = int(self.cfg.get("cdp_port") or 9222)
+            cdp_url = f"http://127.0.0.1:{port}"
+
+        try:
+            r = requests.get(cdp_url.rstrip("/") + "/json", timeout=5)
+            r.raise_for_status()
+            targets = r.json()
+        except requests.RequestException as e:
+            data.status = "error"
+            data.error = "请先在设置里启动 CDP Chrome 并登录 platform.xiaomimimo.com（连接失败）"
+            log(f"MiMo CDP /json 连接失败: {e}")
+            return data
+        except ValueError as e:
+            data.status = "error"
+            data.error = "CDP 返回非 JSON，可能端口被占用"
+            log(f"MiMo CDP /json 非 JSON: {e}")
+            return data
+
+        page = next(
+            (t for t in targets
+             if t.get("type") == "page" and "xiaomimimo.com" in (t.get("url") or "")),
+            None,
+        )
+        if page is None:
+            data.status = "error"
+            data.error = "请在 CDP Chrome 里打开 platform.xiaomimimo.com 并登录"
+            log(f"MiMo CDP 未发现 xiaomimimo.com 标签页，现有 target: "
+                f"{[(t.get('type'), (t.get('url') or '')[:60]) for t in targets]}")
+            return data
+
+        ws_url = page.get("webSocketDebuggerUrl")
+        if not ws_url:
+            data.status, data.error = "error", "CDP target 缺少 webSocketDebuggerUrl"
+            return data
+
+        js = (
+            "(async()=>{"
+            "const r=await fetch(" + json.dumps(self.API_PATH) + ",{credentials:'include'});"
+            "return await r.text();})()"
+        )
+
+        try:
+            ws = ws_connect(
+                ws_url, timeout=30,
+                origin="http://127.0.0.1:" + str(self.cfg.get("cdp_port") or 9222),
+            )
+            ws.send(json.dumps({
+                "id": 1, "method": "Runtime.evaluate",
+                "params": {"expression": js, "awaitPromise": True,
+                           "returnByValue": True},
+            }))
+            raw = ws.recv()
+            ws.close()
+        except Exception as e:
+            data.status = "error"
+            data.error = f"CDP 通信失败: {e}"
+            log(f"MiMo CDP WebSocket 异常: {e}")
+            return data
+
+        try:
+            resp = json.loads(raw)
+        except ValueError as e:
+            data.status, data.error = "error", f"CDP 响应非 JSON: {e}"
+            return data
+
+        result = resp.get("result", {}).get("result", {})
+        if result.get("type") == "undefined" or "value" not in result:
+            exc = resp.get("result", {}).get("exceptionDetails")
+            if exc:
+                msg = (exc.get("exception", {}) or {}).get("description") or exc.get("text")
+                data.status = "error"
+                data.error = f"API 调用失败（登录可能已过期）: {msg}"
+                log(f"MiMo CDP evaluate 异常: {msg}")
+                return data
+            data.status, data.error = "error", "CDP 返回 undefined"
+            return data
+
+        text = result.get("value") or ""
+        log(f"MiMo CDP API 返回: {text[:300]}")
+        if not text.strip():
+            data.status, data.error = "error", "API 返回空（登录可能已失效）"
+            return data
+
+        return self._parse_json(text, data)
+
+    def _parse_json(self, text: str, data: UsageData) -> UsageData:
+        try:
+            j = json.loads(text)
+        except ValueError as e:
+            data.status, data.error = "error", f"JSON 解析失败: {e}"
+            return data
+
+        if j.get("code") != 0:
+            data.status = "error"
+            data.error = j.get("message") or "API 返回错误"
+            return data
+
+        d = j.get("data") or {}
+
+        # 只取月度额度（Plan 总额）
+        month = d.get("monthUsage") or {}
+        month_pct = month.get("percent")
+        if month_pct is not None:
+            pct = float(month_pct) * 100  # 0.239 -> 23.9
+            items = month.get("items") or []
+            note = ""
+            if items:
+                it = items[0]
+                used = it.get("used", 0)
+                limit = it.get("limit", 0)
+                if limit > 0:
+                    note = f"{fmt_tokens(used)} / {fmt_tokens(limit)} tokens"
+            data.items.append(UsageItem("Monthly usage", pct, note=note))
+
+        if not data.items:
+            data.status = "empty"
+            data.error = "未找到用量数据"
+
+        log(f"MiMo 解析: status={data.status}, items={[(i.label, i.used_percent) for i in data.items]}")
+        return data
+
+
 def build(cfg: dict) -> BaseProvider:
     ptype = cfg.get("type")
     if ptype == "zhipu":
         return ZhipuProvider(cfg)
     if ptype == "opencode":
         return OpenCodeProvider(cfg)
+    if ptype == "mimo":
+        return MimoProvider(cfg)
     raise ValueError(f"未知 provider 类型: {ptype}")

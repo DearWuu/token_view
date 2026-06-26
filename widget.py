@@ -17,6 +17,7 @@ import providers
 BADGE = {                          # 平台徽标：背景色 + 文字
     "zhipu":    ("#3b82f6", "智"),
     "opencode": ("#a855f7", "OC"),
+    "mimo":     ("#ff6900", "Mi"),
 }
 
 

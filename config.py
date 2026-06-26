@@ -76,4 +76,13 @@ def new_provider(ptype: str) -> dict:
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",
         })
+    elif ptype == "mimo":
+        base.update({
+            "cookie": "",
+            "name": "小米 MiMo",
+            # CDP 模式：连接用户已登录的调试 Chrome 抓页面，避免手动 cookie
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
     return base

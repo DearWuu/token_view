@@ -8,9 +8,9 @@
 import copy
 import json
 import os
+import platform
 import subprocess
 import traceback
-import winreg
 
 from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QDesktopServices
@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
     QPushButton, QCheckBox, QSpinBox, QSlider,
     QWidget, QFormLayout, QGroupBox, QMessageBox,
 )
+
+if platform.system() == "Windows":
+    import winreg
 
 import config
 from logger import log
@@ -36,31 +39,50 @@ except Exception as _e:
 
 CHROME_TEAM_URL = "https://bigmodel.cn/coding-plan/team/usage-stats"
 CHROME_OC_URL = "https://opencode.ai"
+CHROME_MIMO_URL = "https://platform.xiaomimimo.com/console/plan-manage"
 
 
 def _find_chrome() -> str:
-    """常见位置 + 注册表查找 chrome.exe，找不到返回空串。"""
-    candidates = [
-        os.environ.get("PROGRAMFILES", r"C:\Program Files"),
-        os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
-        os.environ.get("LOCALAPPDATA", ""),
-    ]
-    for base in candidates:
-        if not base:
-            continue
-        p = os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")
-        if os.path.exists(p):
-            return p
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
-        ) as k:
-            v, _ = winreg.QueryValueEx(k, None)
-            if v and os.path.exists(v):
-                return v
-    except OSError:
-        pass
+    """常见位置查找 Chrome，找不到返回空串。"""
+    system = platform.system()
+    if system == "Darwin":
+        # macOS
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+    elif system == "Windows":
+        # Windows
+        candidates = [
+            os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+            os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+            os.environ.get("LOCALAPPDATA", ""),
+        ]
+        for base in candidates:
+            if not base:
+                continue
+            p = os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")
+            if os.path.exists(p):
+                return p
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            ) as k:
+                v, _ = winreg.QueryValueEx(k, None)
+                if v and os.path.exists(v):
+                    return v
+        except OSError:
+            pass
+    else:
+        # Linux
+        for name in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
+            p = subprocess.run(["which", name], capture_output=True, text=True).stdout.strip()
+            if p and os.path.exists(p):
+                return p
     return ""
 
 
@@ -389,33 +411,44 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Token 用量监控 · 设置")
         self.resize(800, 600)
+        self.setMinimumSize(600, 400)
         self.cfg = cfg
         self.work = copy.deepcopy(cfg.get("providers", []))
         self._index = -1
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+        
         body = QHBoxLayout()
+        body.setSpacing(12)
         root.addLayout(body, 1)
 
         left = QVBoxLayout()
+        left.setSpacing(6)
         left.addWidget(QLabel("账号"))
         self.listw = QListWidget()
         self.listw.currentRowChanged.connect(self._on_select)
         left.addWidget(self.listw, 1)
         btnrow = QHBoxLayout()
+        btnrow.setSpacing(4)
         b_add_z = QPushButton("＋ 智谱")
         b_add_o = QPushButton("＋ OpenCode")
+        b_add_m = QPushButton("＋ MiMo")
         b_del = QPushButton("删除")
         b_add_z.clicked.connect(lambda: self._add("zhipu"))
         b_add_o.clicked.connect(lambda: self._add("opencode"))
+        b_add_m.clicked.connect(lambda: self._add("mimo"))
         b_del.clicked.connect(self._del)
         btnrow.addWidget(b_add_z)
         btnrow.addWidget(b_add_o)
+        btnrow.addWidget(b_add_m)
         btnrow.addWidget(b_del)
         left.addLayout(btnrow)
         body.addLayout(left, 1)
 
         right = QVBoxLayout()
+        right.setSpacing(8)
 
         common_top = QFormLayout()
         self.f_name = QLineEdit()
@@ -484,7 +517,7 @@ class SettingsDialog(QDialog):
         self.b_oc_cdp.clicked.connect(self._launch_oc_cdp)
 
         self.f_help_o = QLabel(
-            "【推荐 CDP 模式】点“启动调试 Chrome”登录 opencode.ai 后自动抓取用量。\n"
+            "【推荐 CDP 模式】点「启动调试 Chrome」登录 opencode.ai 后自动抓取用量。\n"
             "Cookie 为旧备用路径数据，CDP 启用时可留空。")
         self.f_help_o.setWordWrap(True)
         of.addRow("Workspace ID", self.f_workspace)
@@ -495,6 +528,28 @@ class SettingsDialog(QDialog):
         of.addRow("", self.b_oc_cdp)
         of.addRow(self.f_help_o)
         right.addWidget(self.opencode_box)
+
+        self.mimo_box = QGroupBox("小米 MiMo Token Plan")
+        mf = QFormLayout(self.mimo_box)
+        self.f_mimo_cookie = QLineEdit()
+        self.f_mimo_cookie.setPlaceholderText("登录后自动填入，或手动粘贴 cookie（CDP 模式下可留空）")
+        self.f_mimo_cdp_enabled = QCheckBox("启用 CDP（连接已登录的调试 Chrome 抓页面，推荐）")
+        self.f_mimo_cdp_enabled.setChecked(True)
+        self.f_mimo_cdp_port = QSpinBox()
+        self.f_mimo_cdp_port.setRange(1024, 65535)
+        self.f_mimo_cdp_port.setValue(9222)
+        self.b_mimo_cdp = QPushButton("🚀 启动调试 Chrome 登录 MiMo…")
+        self.b_mimo_cdp.clicked.connect(self._launch_mimo_cdp)
+        self.f_help_m = QLabel(
+            "【推荐 CDP 模式】点「启动调试 Chrome」登录 platform.xiaomimimo.com 后自动抓取用量。\n"
+            "Cookie 为旧备用路径数据，CDP 启用时可留空。")
+        self.f_help_m.setWordWrap(True)
+        mf.addRow("Cookie", self.f_mimo_cookie)
+        mf.addRow("", self.f_mimo_cdp_enabled)
+        mf.addRow("调试端口", self.f_mimo_cdp_port)
+        mf.addRow("", self.b_mimo_cdp)
+        mf.addRow(self.f_help_m)
+        right.addWidget(self.mimo_box)
 
         gbox = QGroupBox("通用")
         cf = QFormLayout(gbox)
@@ -581,8 +636,10 @@ class SettingsDialog(QDialog):
         self.f_name.setText(p.get("name", ""))
         self.f_enabled.setChecked(p.get("enabled", True))
         is_z = p["type"] == "zhipu"
+        is_m = p["type"] == "mimo"
         self.zhipu_box.setVisible(is_z)
-        self.opencode_box.setVisible(not is_z)
+        self.opencode_box.setVisible(not is_z and not is_m)
+        self.mimo_box.setVisible(is_m)
         if is_z:
             self.f_apikey.setText(p.get("api_key", ""))
             self.f_cookie_z.setText(p.get("cookie", ""))
@@ -590,6 +647,10 @@ class SettingsDialog(QDialog):
             self.f_customer_id.setText(p.get("customer_id", ""))
             self.f_cdp_enabled.setChecked(p.get("cdp_enabled", True))
             self.f_cdp_port.setValue(int(p.get("cdp_port") or 9222))
+        elif is_m:
+            self.f_mimo_cookie.setText(p.get("cookie", ""))
+            self.f_mimo_cdp_enabled.setChecked(p.get("cdp_enabled", True))
+            self.f_mimo_cdp_port.setValue(int(p.get("cdp_port") or 9222))
         else:
             self.f_workspace.setText(p.get("workspace_id", ""))
             self.f_cookie.setText(p.get("cookie", ""))
@@ -611,6 +672,11 @@ class SettingsDialog(QDialog):
             p["cdp_enabled"] = self.f_cdp_enabled.isChecked()
             p["cdp_port"] = self.f_cdp_port.value()
             p["cdp_url"] = f"http://127.0.0.1:{self.f_cdp_port.value()}"
+        elif p["type"] == "mimo":
+            p["cookie"] = self.f_mimo_cookie.text().strip()
+            p["cdp_enabled"] = self.f_mimo_cdp_enabled.isChecked()
+            p["cdp_port"] = self.f_mimo_cdp_port.value()
+            p["cdp_url"] = f"http://127.0.0.1:{self.f_mimo_cdp_port.value()}"
         else:
             p["workspace_id"] = self.f_workspace.text().strip()
             p["cookie"] = self.f_cookie.text().strip()
@@ -640,6 +706,18 @@ class SettingsDialog(QDialog):
         QMessageBox.information(
             self, "已启动调试 Chrome",
             f"请在新打开的 Chrome 里登录 opencode.ai。\n"
+            f"调试端口：{port}\n保存设置后悬浮窗会自动刷新。")
+
+    def _launch_mimo_cdp(self):
+        log(">>> 点击：启动调试 Chrome（MiMo）")
+        port = self.f_mimo_cdp_port.value()
+        ok, err = launch_cdp_chrome(port, start_url=CHROME_MIMO_URL)
+        if not ok:
+            QMessageBox.warning(self, "启动失败", err)
+            return
+        QMessageBox.information(
+            self, "已启动调试 Chrome",
+            f"请在新打开的 Chrome 里登录 platform.xiaomimimo.com。\n"
             f"调试端口：{port}\n保存设置后悬浮窗会自动刷新。")
 
     def _login_zhipu(self):
