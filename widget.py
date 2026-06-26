@@ -308,48 +308,59 @@ class UsageCard(QFrame):
                     animate_bar(bar, it.used_percent, prev)
 
     def _render_dock(self, items, s):
-        """顶部 dock 模式：服务商名 + 各用量项横向一行，字体更大、布局扁平。"""
-        lbl_px = max(12, int(14 * s))
-        pct_px = max(13, int(15 * s))
-        name_px = max(13, int(16 * s))
-        bar_h = max(6, int(8 * s))
-        pct_w = max(38, int(46 * s))
-        label_w = max(55, int(70 * s))
-        name_w = max(70, int(85 * s))
+        """顶部 dock 模式：服务商名 + 各用量项横向一行，字体更大更粗、进度条更粗。"""
+        lbl_px = max(14, int(16 * s))
+        pct_px = max(16, int(18 * s))
+        name_px = max(16, int(19 * s))
+        bar_h = max(11, int(14 * s))
+        pct_w = max(42, int(50 * s))
+        label_w = max(60, int(72 * s))
+        name_w = max(75, int(90 * s))
+        bar_radius = max(4, int(5 * s))
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(int(14 * s))
+        row.setSpacing(int(3 * s))
 
         name_lbl = QLabel(self._name)
         name_lbl.setObjectName("title")
         name_lbl.setFixedWidth(name_w)
-        name_lbl.setStyleSheet(f"font-size:{name_px}px;font-weight:600;color:#f2f2f4;")
+        name_lbl.setStyleSheet(
+            f"font-size:{name_px}px;font-weight:800;color:#f2f2f4;"
+        )
 
         badge = self._make_dock_badge(s)
         row.addWidget(badge)
         row.addWidget(name_lbl)
 
-        for it in items:
+        for i, it in enumerate(items):
+            if i > 0:
+                row.addSpacing(int(22 * s))
             c = color_for(it.used_percent)
             lbl = QLabel(it.label)
             lbl.setObjectName("itemlabel")
             lbl.setFixedWidth(label_w)
-            lbl.setStyleSheet(f"font-size:{lbl_px}px;color:#bdbdc4;")
+            lbl.setStyleSheet(
+                f"font-size:{lbl_px}px;font-weight:600;color:#cfcfd4;"
+            )
             bar = QProgressBar()
             bar.setRange(0, 100)
             bar.setTextVisible(False)
             bar.setFixedHeight(bar_h)
-            bar.setMinimumWidth(int(40 * s))
+            bar.setMinimumWidth(int(45 * s))
             bar.setStyleSheet(
-                "QProgressBar{background:rgba(255,255,255,0.08);border-radius:3px;}"
-                f"QProgressBar::chunk{{background:{c};border-radius:3px;}}"
+                "QProgressBar{background:rgba(255,255,255,0.10);"
+                f"border-radius:{bar_radius}px;}}"
+                "QProgressBar::chunk{"
+                f"background:{c};border-radius:{bar_radius}px;}}"
             )
             pct = QLabel(f"{it.used_percent:.0f}%")
             pct.setObjectName("pct")
             pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             pct.setFixedWidth(pct_w)
-            pct.setStyleSheet(f"color:{c};font-weight:700;font-size:{pct_px}px;")
+            pct.setStyleSheet(
+                f"color:{c};font-weight:800;font-size:{pct_px}px;"
+            )
             row.addWidget(lbl)
             row.addWidget(bar, 1)
             row.addWidget(pct)
@@ -423,12 +434,12 @@ class FloatingWidget(QWidget):
         root.setSpacing(8)
 
         # 顶部条：标题 + 快捷按钮
-        bar = QHBoxLayout()
-        bar.setContentsMargins(15, 12, 10, 6)
+        self.bar_layout = QHBoxLayout()
+        self.bar_layout.setContentsMargins(15, 12, 10, 6)
         self.apptitle = QLabel("⚡ Token 用量")
         self.apptitle.setObjectName("apptitle")
-        bar.addWidget(self.apptitle)
-        bar.addStretch()
+        self.bar_layout.addWidget(self.apptitle)
+        self.bar_layout.addStretch()
         self.btn_refresh = QPushButton("↻")
         self.btn_refresh.setObjectName("iconbtn")
         self.btn_refresh.setFixedSize(26, 26)
@@ -449,11 +460,11 @@ class FloatingWidget(QWidget):
         self.btn_set.setFixedSize(26, 26)
         self.btn_set.setToolTip("设置")
         self.btn_set.clicked.connect(self._on_settings)
-        bar.addWidget(self.btn_refresh)
-        bar.addWidget(self.btn_compact)
-        bar.addWidget(self.btn_dock)
-        bar.addWidget(self.btn_set)
-        root.addLayout(bar)
+        self.bar_layout.addWidget(self.btn_refresh)
+        self.bar_layout.addWidget(self.btn_compact)
+        self.bar_layout.addWidget(self.btn_dock)
+        self.bar_layout.addWidget(self.btn_set)
+        root.addLayout(self.bar_layout)
 
         self.cards_wrap = QWidget()
         cl = QVBoxLayout(self.cards_wrap)
@@ -546,8 +557,18 @@ class FloatingWidget(QWidget):
             self.btn_dock.setText("⤒" if self._dock else "⤓")
             self.grip.setVisible(not self._dock)
             self.btn_compact.setVisible(not self._dock)
+            margin = 6 if self._dock else 12
+            self.layout().setContentsMargins(margin, margin, margin, margin)
+            if self._dock:
+                self.bar_layout.setContentsMargins(15, 6, 10, 3)
+            else:
+                self.bar_layout.setContentsMargins(15, 12, 10, 6)
+                self.btn_refresh.setVisible(True)
+                self.btn_dock.setVisible(True)
+                self.btn_set.setVisible(True)
         if self._dock:
             QTimer.singleShot(0, self._apply_dock_geometry)
+            QTimer.singleShot(10, self._update_dock_buttons)
         self._apply_scale()
         self.refresh_now()
 
@@ -576,12 +597,19 @@ class FloatingWidget(QWidget):
         cl = self.cards_wrap.layout()
         cl.setSpacing(2 if self._dock else (4 if self._compact else 8))
         self.btn_dock.setText("⤒" if self._dock else "⤓")
-        # dock 下保留 resize 手柄（可继续拖宽高），只隐藏紧凑按钮
         self.btn_compact.setVisible(not self._dock)
+        self.grip.setVisible(not self._dock)
+        margin = 6 if self._dock else 12
+        self.layout().setContentsMargins(margin, margin, margin, margin)
         if self._dock:
+            self.bar_layout.setContentsMargins(15, 6, 10, 3)
             self._apply_dock_geometry()
+            self._update_dock_buttons()
         else:
-            # 恢复浮窗几何
+            self.bar_layout.setContentsMargins(15, 12, 10, 6)
+            self.btn_refresh.setVisible(True)
+            self.btn_dock.setVisible(True)
+            self.btn_set.setVisible(True)
             geo = self.cfg.get("geometry")
             if geo and len(geo) == 4:
                 self.setGeometry(*geo)
@@ -596,22 +624,27 @@ class FloatingWidget(QWidget):
         g = screen.availableGeometry()
         w = g.width() - 80
         rows = max(1, len(self.cards))
-        h = min(160, 38 + rows * 30 + 20)
+        h = min(120, 20 + rows * 28 + 12)
         self.setMinimumWidth(0)
         self.setGeometry(g.left() + 40, g.top() + 6, w, h)
         QApplication.processEvents()
-        hh = min(180, self.container.sizeHint().height() + 24)
-        self.resize(w, max(h, hh))
+        hh = min(120, self.container.sizeHint().height() + 16)
+        self.resize(w, min(h, hh))
 
     # ---- 响应式缩放 ----
     def _apply_scale(self):
         if self._dock:
-            s = self._scale_for_width(self.width(), base=900, lo=0.85, hi=1.25)
+            s = self._dock_scale()
         else:
             s = self._scale_for_width(self.width())
         self._last_scale = s
         for card in self.cards.values():
             card.set_scale(s)
+
+    def _dock_scale(self):
+        """dock 模式下宽度和高度都会影响缩放，高度压扁时字体自动缩小。"""
+        ref = min(self.width(), self.height() * 8)
+        return max(0.78, min(1.25, ref / 900))
 
     @staticmethod
     def _scale_for_width(w, base=280, lo=0.85, hi=1.5):
@@ -647,8 +680,8 @@ class FloatingWidget(QWidget):
         if not self._dock:
             self.adjustSize()
         else:
-            hh = min(180, self.container.sizeHint().height() + 24)
-            if abs(hh - self.height()) > 4:
+            hh = min(110, self.container.sizeHint().height() + 16)
+            if hh < self.height() - 4:
                 self.resize(self.width(), hh)
 
     # ---- 拖动 + 丝滑 ----
@@ -676,8 +709,21 @@ class FloatingWidget(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._apply_scale()
+        if self._dock:
+            self._update_dock_buttons()
         if not self._dock and e.oldSize().isValid():
             self.cfg["geometry"] = [self.x(), self.y(), self.width(), self.height()]
+
+    def _update_dock_buttons(self):
+        """高度低于阈值时隐藏右上角按钮并压缩 bar 留白，让窗口能压得更扁。"""
+        show = self.height() > 80
+        self.btn_refresh.setVisible(show)
+        self.btn_dock.setVisible(show)
+        self.btn_set.setVisible(show)
+        if show:
+            self.bar_layout.setContentsMargins(15, 6, 10, 3)
+        else:
+            self.bar_layout.setContentsMargins(15, 2, 10, 1)
 
     def mouseDoubleClickEvent(self, e):
         self._on_settings()

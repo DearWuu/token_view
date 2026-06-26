@@ -16,7 +16,7 @@ from PySide6.QtCore import Qt, QUrl, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QPushButton, QCheckBox, QSpinBox, QDoubleSpinBox,
+    QPushButton, QCheckBox, QSpinBox, QSlider,
     QWidget, QFormLayout, QGroupBox, QMessageBox,
 )
 
@@ -502,11 +502,20 @@ class SettingsDialog(QDialog):
         self.f_interval.setRange(15, 3600)
         self.f_interval.setSuffix(" 秒")
         self.f_interval.setSingleStep(15)
-        self.f_opacity = QDoubleSpinBox()
-        self.f_opacity.setRange(0.3, 1.0)
-        self.f_opacity.setSingleStep(0.05)
+        self.f_opacity = QSlider(Qt.Horizontal)
+        self.f_opacity.setRange(30, 100)
+        self.f_opacity.setSingleStep(5)
+        self.f_opacity.setTickPosition(QSlider.TicksBelow)
+        self.f_opacity.setTickInterval(10)
+        self.f_opacity_label = QLabel("95%")
+        self.f_opacity_label.setMinimumWidth(36)
+        self.f_opacity.valueChanged.connect(
+            lambda v: self.f_opacity_label.setText(f"{v}%"))
+        op_row = QHBoxLayout()
+        op_row.addWidget(self.f_opacity, 1)
+        op_row.addWidget(self.f_opacity_label)
         cf.addRow("刷新间隔", self.f_interval)
-        cf.addRow("窗口透明度", self.f_opacity)
+        cf.addRow("窗口透明度", op_row)
         b_open = QPushButton("打开配置目录")
         b_open.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(config.config_dir())))
         cf.addRow("", b_open)
@@ -537,7 +546,7 @@ class SettingsDialog(QDialog):
 
     def _fill_globals(self):
         self.f_interval.setValue(int(self.cfg.get("refresh_interval", 60)))
-        self.f_opacity.setValue(float(self.cfg.get("opacity", 0.95)))
+        self.f_opacity.setValue(int(float(self.cfg.get("opacity", 0.95)) * 100))
 
     def _reload_list(self):
         self.listw.blockSignals(True)
@@ -679,5 +688,5 @@ class SettingsDialog(QDialog):
         self._flush()
         self.cfg["providers"] = self.work
         self.cfg["refresh_interval"] = self.f_interval.value()
-        self.cfg["opacity"] = self.f_opacity.value()
+        self.cfg["opacity"] = self.f_opacity.value() / 100.0
         self.accept()
