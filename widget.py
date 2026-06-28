@@ -269,7 +269,7 @@ class UsageCard(QFrame):
             pct.setMinimumWidth(pct_w)
 
             if self._compact:
-                lbl.setStyleSheet(f"color:#cfcfd4;font-size:{lbl_px}px;")
+                lbl.setStyleSheet(f"color:#cfcfd4;font-size:{max(8, lbl_px - 1)}px;")
                 pct.setStyleSheet(f"color:{c};font-weight:700;font-size:{pct_px}px;"
                                   "background:rgba(255,255,255,0.05);"
                                   "padding:0 4px;border-radius:4px;")
@@ -304,9 +304,8 @@ class UsageCard(QFrame):
             self._rows.append(wrap)
             if not self._compact:
                 bar = self._find_child_bar(wrap)
-                if bar:
-                    prev = self._prev_pct.get(it.label, -1)
-                    animate_bar(bar, it.used_percent, prev)
+                prev = self._prev_pct.get(it.label, -1)
+                animate_bar(bar, it.used_percent, prev)
 
     def _render_dock(self, items, s):
         """顶部 dock 模式：服务商名 + 各用量项横向一行，字体更大更粗、进度条更粗。"""
@@ -446,24 +445,30 @@ class FloatingWidget(QWidget):
         self.btn_refresh.setFixedSize(26, 26)
         self.btn_refresh.setToolTip("立即刷新")
         self.btn_refresh.clicked.connect(self.refresh_now)
+        self.btn_top = QPushButton("⇧")
+        self.btn_top.setObjectName("iconbtn")
+        self.btn_top.setFixedSize(26, 26)
+        self.btn_top.setToolTip("放大并移到屏幕顶部")
+        self.btn_top.clicked.connect(self._move_to_screen_top)
         self.btn_compact = QPushButton("⤢")
         self.btn_compact.setObjectName("iconbtn")
         self.btn_compact.setFixedSize(26, 26)
-        self.btn_compact.setToolTip("切换紧凑/展开")
+        self.btn_compact.setToolTip("切换简单/复杂")
         self.btn_compact.clicked.connect(self._toggle_compact)
         self.btn_dock = QPushButton("⤓")
         self.btn_dock.setObjectName("iconbtn")
         self.btn_dock.setFixedSize(26, 26)
         self.btn_dock.setToolTip("切换顶部模式")
         self.btn_dock.clicked.connect(self._toggle_dock)
+        self.btn_dock.setVisible(False)
         self.btn_set = QPushButton("⚙")
         self.btn_set.setObjectName("iconbtn")
         self.btn_set.setFixedSize(26, 26)
         self.btn_set.setToolTip("设置")
         self.btn_set.clicked.connect(self._on_settings)
         self.bar_layout.addWidget(self.btn_refresh)
+        self.bar_layout.addWidget(self.btn_top)
         self.bar_layout.addWidget(self.btn_compact)
-        self.bar_layout.addWidget(self.btn_dock)
         self.bar_layout.addWidget(self.btn_set)
         root.addLayout(self.bar_layout)
 
@@ -535,7 +540,7 @@ class FloatingWidget(QWidget):
         self.thread.wait(2000)
 
     def _start_timer(self):
-        secs = max(15, int(self.cfg.get("refresh_interval", 60)))
+        secs = max(15, int(self.cfg.get("refresh_interval",15)))
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_now)
         self.timer.start(secs * 1000)
@@ -543,7 +548,7 @@ class FloatingWidget(QWidget):
     def apply_config(self):
         self._target_opacity = float(self.cfg.get("opacity", 0.92))
         self.setWindowOpacity(self._target_opacity)
-        secs = max(15, int(self.cfg.get("refresh_interval", 60)))
+        secs = max(15, int(self.cfg.get("refresh_interval", 15)))
         self.timer.setInterval(secs * 1000)
         self._compact = bool(self.cfg.get("compact", False))
         self._apply_compact()
@@ -581,12 +586,29 @@ class FloatingWidget(QWidget):
         self._apply_scale()
 
     def _apply_compact(self):
-        # 紧凑模式：隐藏进度条副文本、缩小卡片间距、缩小整体 padding
+        # 简单模式：只保留摘要数字，窗口跟随内容收缩。
         for card in self.cards.values():
             card.set_compact(self._compact)
         cl = self.cards_wrap.layout()
         cl.setSpacing(4 if self._compact else 8)
         self.btn_compact.setText("⤡" if self._compact else "⤢")
+
+    def _move_to_screen_top(self):
+        """把悬浮块放大并移动到当前屏幕顶部。"""
+        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        if screen is None:
+            self.move(self.x(), 0)
+            return
+        g = screen.availableGeometry()
+        margin = min(40, max(0, g.width() // 30))
+        w = max(320, g.width() - margin * 2)
+        h = max(45, self.height())
+        x = g.left() + margin
+        y = g.top()
+        self.resize(w, h)
+        self.move(x, y)
+        if not self._dock:
+            self.cfg["geometry"] = [self.x(), self.y(), self.width(), self.height()]
 
     # ---- 顶部 dock 模式 ----
     def _toggle_dock(self):

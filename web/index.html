@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token 用量监控</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 标题栏 -->
+        <div class="titlebar" id="titlebar">
+            <span class="app-title">⚡ Token 用量</span>
+            <div class="titlebar-actions">
+                <button class="icon-btn" id="btn-refresh" title="刷新">↻</button>
+                <button class="icon-btn" id="btn-top" title="放大并移到屏幕顶部">⇧</button>
+                <button class="icon-btn" id="btn-mode" title="切换简单/复杂">⤡</button>
+                <button class="icon-btn" id="btn-pin" title="置顶">📌</button>
+                <button class="icon-btn" id="btn-settings" title="设置">⚙</button>
+                <button class="icon-btn" id="btn-close" title="退出">✕</button>
+            </div>
+        </div>
+
+        <!-- 卡片容器 -->
+        <div class="cards-container" id="cards-container">
+            <!-- 动态生成的卡片 -->
+        </div>
+
+        <!-- 空状态提示 -->
+        <div class="empty-tip" id="empty-tip" style="display:none;">
+            暂无账号，点右上 ⚙ 添加
+        </div>
+
+        <!-- 加载状态 -->
+        <div class="loading" id="loading">
+            <div class="loading-spinner"></div>
+            <span>加载中…</span>
+        </div>
+
+        <!-- resize 手柄 -->
+        <div class="resize-grip" id="resize-grip"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -22,7 +22,7 @@ def config_path() -> str:
 
 DEFAULT = {
     "providers": [],          # 每项: {id,type,name,enabled, api_key/cookie, workspace_id...}
-    "refresh_interval": 60,   # 秒
+    "refresh_interval": 15,   # 秒
     "opacity": 0.92,          # 悬浮窗透明度 0~1
     "always_on_top": True,
     "geometry": None,         # [x, y, w, h]，记忆窗口位置

@@ -1,107 +1,139 @@
-"""Token 用量监控 —— 入口。
+"""Token 用量监控 —— PyWebView 版本入口。
 
-运行: python -X utf8 main.py
+运行: python main.py
 """
 import sys
+import os
+import threading
+import platform
 
-from PySide6.QtWidgets import QApplication
+import webview
 
 import config
-from widget import FloatingWidget, make_tray_icon
-from settings import SettingsDialog
+from api import Api
+from logger import log
 
-QSS = """
-* { outline: none; }
-QWidget {
-    color:#e8e8ea; font-family:'Microsoft YaHei UI','Segoe UI',sans-serif;
-    font-size:12px;
-}
-QFrame#container {
-    background:rgba(20,20,24,245);
-    border:1px solid rgba(255,255,255,0.06);
-    border-radius:18px;
-}
-QFrame#container:hover {
-    border-color: rgba(110,150,255,0.28);
-}
-QFrame#card {
-    background:rgba(255,255,255,0.045);
-    border:1px solid rgba(255,255,255,0.05);
-    border-radius:13px;
-}
-QFrame#card:hover {
-    background:rgba(255,255,255,0.07);
-    border-color:rgba(110,140,255,0.22);
-}
-QLabel#apptitle { font-size:12px; font-weight:700; color:#dcdce0; letter-spacing:0.6px; }
-QLabel#title     { font-size:13px; font-weight:600; color:#f2f2f4; }
-QLabel#level     { font-size:10px; color:#8b9cf0;
-                   background:rgba(110,140,255,0.14);
-                   padding:2px 8px; border-radius:8px; }
-QLabel#itemlabel { color:#c2c2c8; font-size:11px; }
-QLabel#sub       { color:#6e6e74; font-size:10px; padding-left:2px; }
-QLabel#pct       { font-weight:700; font-size:12px; }
-QLabel#err       { color:#f0a020; font-size:11px; }
-QLabel#tip       { color:#8a8a90; font-size:11px; }
-QPushButton#iconbtn {
-    background:transparent; border:none; color:#8a8a92;
-    font-size:13px; border-radius:13px;
-    padding:0;
-}
-QPushButton#iconbtn:hover  { background:rgba(110,140,255,0.18); color:#ffffff; }
-QPushButton#iconbtn:pressed{ background:rgba(110,140,255,0.30); }
-QPushButton#iconbtn:disabled { color:#444; }
+# macOS 特定：设置窗口级别
+if platform.system() == 'Darwin':
+    try:
+        import objc
+        from Cocoa import NSApplication, NSWindow
+        from Quartz import kCGFloatingWindowLevel, kCGNormalWindowLevel
+        HAS_MACOS_API = True
+    except ImportError:
+        HAS_MACOS_API = False
+        log("macOS Cocoa API 不可用")
+else:
+    HAS_MACOS_API = False
 
-QDialog { background:#1c1c20; }
-QGroupBox { background:#232328; border:1px solid #33333a; border-radius:9px;
-            margin-top:12px; padding:10px 10px 8px 10px; color:#aaa; }
-QGroupBox::title { left:11px; padding:0 5px; }
-QPushButton {
-    background:#2c2c33; border:1px solid #3a3a42; border-radius:7px;
-    padding:6px 14px; color:#e6e6e6;
-}
-QPushButton:hover { background:#383841; border-color:#4a90d9; }
-QPushButton:disabled { color:#666; }
-QLineEdit, QSpinBox, QDoubleSpinBox {
-    background:#2a2a30; border:1px solid #3a3a42; border-radius:7px;
-    padding:6px 9px; color:#e6e6e6; selection-background-color:#3b82f6;
-}
-QListWidget { background:#26262c; border:1px solid #33333a; border-radius:8px; }
-QListWidget::item { padding:6px 8px; }
-QListWidget::item:selected { background:#3b82f6; color:white; }
-QCheckBox { color:#e6e6e6; }
-QMenu { background:#26262c; border:1px solid #33333a; color:#e6e6e6; }
-QMenu::item { padding:6px 20px; }
-QMenu::item:selected { background:#3b82f6; }
-QProgressBar { background:transparent; border:none; }
-"""
+
+def create_tray_icon():
+    """创建托盘图标。"""
+    try:
+        from PIL import Image, ImageDraw
+        size = 64
+        image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        
+        # 蓝色圆角矩形
+        draw.rounded_rectangle(
+            [(6, 6), (size-6, size-6)],
+            radius=16,
+            fill=(59, 130, 246, 255)
+        )
+        
+        # 白色 "T" 字
+        draw.text(
+            (size//2, size//2),
+            "T",
+            fill=(255, 255, 255, 255),
+            anchor="mm"
+        )
+        
+        return image
+    except Exception:
+        return None
+
+
+def set_window_on_top_macos(on_top=True):
+    """macOS 特定：设置窗口级别为浮动（置顶）。"""
+    if not HAS_MACOS_API:
+        return
+    
+    try:
+        app = NSApplication.sharedApplication()
+        windows = app.windows()
+        if windows:
+            window = windows[0]
+            if on_top:
+                window.setLevel_(kCGFloatingWindowLevel)
+            else:
+                window.setLevel_(kCGNormalWindowLevel)
+            log(f"macOS 窗口级别已设置: {'置顶' if on_top else '正常'}")
+    except Exception as e:
+        log(f"设置 macOS 窗口级别失败: {e}")
 
 
 def main():
-    app = QApplication(sys.argv)
-    app.setApplicationName("TokenView")
-    app.setQuitOnLastWindowClosed(False)
-    app.setStyleSheet(QSS)
-
     cfg = config.load()
-
-    def open_settings():
-        if SettingsDialog(cfg).exec():
+    api = Api()
+    
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    html_path = os.path.join(current_dir, 'web', 'index.html')
+    
+    # 创建窗口 - 默认小面板，无边框，透明
+    window = webview.create_window(
+        'Token 用量监控',
+        html_path,
+        js_api=api,
+        width=420,
+        height=400,
+        min_size=(260, 80),
+        on_top=True,  # 屏幕级别置顶
+        resizable=True,
+        x=520,
+        y=220,
+        frameless=True,  # 无边框
+        transparent=True  # 透明背景
+    )
+    
+    # 保存窗口引用到 API
+    api.window = window
+    
+    # 窗口关闭回调
+    def on_closed():
+        try:
+            compact = window.evaluate_js('state.compact') or False
+            dock = window.evaluate_js('state.dock') or False
+            cfg['compact'] = compact
+            cfg['dock'] = dock
             config.save(cfg)
-            widget.apply_config()
-
-    def quit_app():
-        cfg["geometry"] = [widget.x(), widget.y(), widget.width(), widget.height()]
-        config.save(cfg)
-        app.quit()
-
-    widget = FloatingWidget(cfg, on_settings=open_settings, on_quit=quit_app)
-    tray = make_tray_icon(widget, open_settings, quit_app)
-    tray.show()
-    widget.show()
-
-    code = app.exec()
-    sys.exit(code)
+        except Exception as e:
+            log(f"保存配置失败: {e}")
+    
+    window.events.closed += on_closed
+    
+    # 启动 WebView（macOS 上设置窗口级别和透明度）
+    def on_loaded():
+        # 窗口加载完成后设置置顶
+        if platform.system() == 'Darwin':
+            set_window_on_top_macos(True)
+            # 设置初始透明度
+            opacity = cfg.get('opacity', 0.92)
+            try:
+                from Cocoa import NSApplication
+                app = NSApplication.sharedApplication()
+                windows = app.windows()
+                if windows:
+                    window_obj = windows[0]
+                    window_obj.setAlphaValue_(opacity)
+                    log(f"初始透明度已设置: {opacity}")
+            except Exception as e:
+                log(f"设置初始透明度失败: {e}")
+    
+    window.events.loaded += on_loaded
+    
+    webview.start(debug=False)
 
 
 if __name__ == "__main__":

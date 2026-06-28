@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设置 - Token 用量监控</title>
+    <style>
+        :root {
+            --bg-primary: #1c1c20;
+            --bg-input: #2a2a30;
+            --bg-group: #232328;
+            --border-color: #3a3a42;
+            --border-group: #33333a;
+            --text-primary: #e6e6e6;
+            --text-secondary: #aaa;
+            --text-dim: #6e6e74;
+            --color-blue: #3b82f6;
+            --color-green: #3fb950;
+            --color-red: #f85149;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 20px;
+            font-size: 14px;
+        }
+
+        h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: var(--text-primary);
+        }
+
+        .section {
+            background: var(--bg-group);
+            border: 1px solid var(--border-group);
+            border-radius: 9px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 7px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--color-blue);
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: var(--color-blue);
+            color: white;
+            border: none;
+            border-radius: 7px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn-secondary {
+            background: #2c2c33;
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background: #383841;
+        }
+
+        .btn-danger {
+            background: var(--color-red);
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 24px;
+            justify-content: flex-end;
+        }
+
+        .provider-list {
+            margin-bottom: 16px;
+        }
+
+        .provider-item {
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .provider-item:hover {
+            border-color: var(--color-blue);
+        }
+
+        .provider-item.selected {
+            border-color: var(--color-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .provider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .provider-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .provider-type {
+            font-size: 11px;
+            color: var(--color-blue);
+            background: rgba(59, 130, 246, 0.14);
+            padding: 2px 8px;
+            border-radius: 8px;
+        }
+
+        .provider-status {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .provider-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .add-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h2>设置</h2>
+    
+    <!-- 账号列表 -->
+    <div class="section">
+        <div class="section-title">账号管理</div>
+        <div class="add-buttons">
+            <button class="btn btn-small" onclick="addProvider('zhipu')">＋ 智谱</button>
+            <button class="btn btn-small" onclick="addProvider('opencode')">＋ OpenCode</button>
+            <button class="btn btn-small" onclick="addProvider('mimo')">＋ MiMo</button>
+        </div>
+        <div class="provider-list" id="provider-list">
+            <!-- 动态生成 -->
+        </div>
+    </div>
+
+    <!-- Provider 编辑表单 -->
+    <div class="section hidden" id="edit-form">
+        <div class="section-title">编辑账号</div>
+        
+        <!-- 通用字段 -->
+        <div class="form-group">
+            <label>名称</label>
+            <input type="text" id="edit-name" placeholder="自定义名称">
+        </div>
+        
+        <div class="form-group checkbox-group">
+            <input type="checkbox" id="edit-enabled" checked>
+            <label for="edit-enabled" style="margin-bottom: 0;">启用</label>
+        </div>
+
+        <!-- 智谱特有字段 -->
+        <div id="zhipu-fields" class="hidden">
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="password" id="edit-apikey" placeholder="个人版可填">
+            </div>
+            <div class="form-group">
+                <label>Cookie</label>
+                <input type="text" id="edit-cookie-z" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group">
+                <label>用量接口 URL</label>
+                <input type="text" id="edit-usage-url" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group">
+                <label>客户 ID</label>
+                <input type="text" id="edit-customer-id" placeholder="团队版填你的账号 ID">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-cdp-enabled" checked>
+                <label for="edit-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <button class="btn btn-small" onclick="launchCdp('zhipu')">🚀 启动调试 Chrome</button>
+        </div>
+
+        <!-- OpenCode 特有字段 -->
+        <div id="opencode-fields" class="hidden">
+            <div class="form-group">
+                <label>Workspace ID</label>
+                <input type="text" id="edit-workspace" placeholder="自动获取">
+            </div>
+            <div class="form-group">
+                <label>Cookie</label>
+                <input type="text" id="edit-cookie-o" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-oc-cdp-enabled" checked>
+                <label for="edit-oc-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-oc-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <button class="btn btn-small" onclick="launchCdp('opencode')">🚀 启动调试 Chrome</button>
+        </div>
+
+        <!-- MiMo 特有字段 -->
+        <div id="mimo-fields" class="hidden">
+            <div class="form-group">
+                <label>Cookie</label>
+                <input type="text" id="edit-mimo-cookie" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-mimo-cdp-enabled" checked>
+                <label for="edit-mimo-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-mimo-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <button class="btn btn-small" onclick="launchCdp('mimo')">🚀 启动调试 Chrome</button>
+        </div>
+
+        <div class="provider-actions">
+            <button class="btn btn-small" onclick="saveProvider()">保存</button>
+            <button class="btn btn-small btn-danger" onclick="deleteProvider()">删除</button>
+        </div>
+    </div>
+
+    <!-- 通用设置 -->
+    <div class="section">
+        <div class="section-title">通用设置</div>
+        <div class="form-group">
+            <label>刷新间隔（秒）</label>
+            <input type="number" id="refresh-interval" min="15" max="3600" value="60">
+        </div>
+        <div class="form-group">
+            <label>窗口透明度</label>
+            <input type="range" id="opacity" min="30" max="100" value="92">
+            <span id="opacity-value">92%</span>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="btn" id="btn-save">保存</button>
+        <button class="btn btn-secondary" id="btn-cancel">取消</button>
+    </div>
+
+    <script>
+        let config = {};
+        let selectedProviderId = null;
+
+        async function loadConfig() {
+            if (window.pywebview && window.pywebview.api) {
+                config = await window.pywebview.api.get_config();
+                renderProviders();
+                document.getElementById('refresh-interval').value = config.refresh_interval || 60;
+                document.getElementById('opacity').value = (config.opacity || 0.92) * 100;
+                document.getElementById('opacity-value').textContent = Math.round((config.opacity || 0.92) * 100) + '%';
+            }
+        }
+
+        function renderProviders() {
+            const list = document.getElementById('provider-list');
+            const providers = config.providers || [];
+            
+            if (providers.length === 0) {
+                list.innerHTML = '<p style="color: var(--text-dim);">暂无账号，点击上方按钮添加</p>';
+                return;
+            }
+
+            list.innerHTML = providers.map(p => `
+                <div class="provider-item ${p.id === selectedProviderId ? 'selected' : ''}" 
+                     onclick="selectProvider('${p.id}')">
+                    <div class="provider-header">
+                        <span class="provider-name">${p.name || p.type}</span>
+                        <span class="provider-type">${p.type}</span>
+                    </div>
+                    <div class="provider-status">
+                        ${p.enabled ? '✓ 已启用' : '✗ 已禁用'}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectProvider(id) {
+            selectedProviderId = id;
+            const provider = config.providers.find(p => p.id === id);
+            if (!provider) return;
+
+            // 显示编辑表单
+            document.getElementById('edit-form').classList.remove('hidden');
+            
+            // 填充通用字段
+            document.getElementById('edit-name').value = provider.name || '';
+            document.getElementById('edit-enabled').checked = provider.enabled !== false;
+
+            // 隐藏所有特有字段
+            document.getElementById('zhipu-fields').classList.add('hidden');
+            document.getElementById('opencode-fields').classList.add('hidden');
+            document.getElementById('mimo-fields').classList.add('hidden');
+
+            // 显示对应的特有字段
+            if (provider.type === 'zhipu') {
+                document.getElementById('zhipu-fields').classList.remove('hidden');
+                document.getElementById('edit-apikey').value = provider.api_key || '';
+                document.getElementById('edit-cookie-z').value = provider.cookie || '';
+                document.getElementById('edit-usage-url').value = provider.usage_url || '';
+                document.getElementById('edit-customer-id').value = provider.customer_id || '';
+                document.getElementById('edit-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-cdp-port').value = provider.cdp_port || 9222;
+            } else if (provider.type === 'opencode') {
+                document.getElementById('opencode-fields').classList.remove('hidden');
+                document.getElementById('edit-workspace').value = provider.workspace_id || '';
+                document.getElementById('edit-cookie-o').value = provider.cookie || '';
+                document.getElementById('edit-oc-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-oc-cdp-port').value = provider.cdp_port || 9222;
+            } else if (provider.type === 'mimo') {
+                document.getElementById('mimo-fields').classList.remove('hidden');
+                document.getElementById('edit-mimo-cookie').value = provider.cookie || '';
+                document.getElementById('edit-mimo-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-mimo-cdp-port').value = provider.cdp_port || 9222;
+            }
+
+            renderProviders();
+        }
+
+        async function addProvider(type) {
+            if (window.pywebview && window.pywebview.api) {
+                const newProvider = await window.pywebview.api.add_provider(type);
+                config.providers = config.providers || [];
+                config.providers.push(newProvider);
+                selectedProviderId = newProvider.id;
+                renderProviders();
+                selectProvider(newProvider.id);
+            }
+        }
+
+        async function deleteProvider() {
+            if (!selectedProviderId) return;
+            if (!confirm('确定删除该账号？')) return;
+
+            if (window.pywebview && window.pywebview.api) {
+                await window.pywebview.api.remove_provider(selectedProviderId);
+                config.providers = config.providers.filter(p => p.id !== selectedProviderId);
+                selectedProviderId = null;
+                document.getElementById('edit-form').classList.add('hidden');
+                renderProviders();
+            }
+        }
+
+        async function saveProvider() {
+            if (!selectedProviderId) {
+                return;
+            }
+
+            const provider = config.providers.find(p => p.id === selectedProviderId);
+            if (!provider) return;
+
+            // 更新通用字段
+            provider.name = document.getElementById('edit-name').value;
+            provider.enabled = document.getElementById('edit-enabled').checked;
+
+            // 更新特有字段
+            if (provider.type === 'zhipu') {
+                provider.api_key = document.getElementById('edit-apikey').value;
+                provider.cookie = document.getElementById('edit-cookie-z').value;
+                provider.usage_url = document.getElementById('edit-usage-url').value;
+                provider.customer_id = document.getElementById('edit-customer-id').value;
+                provider.cdp_enabled = document.getElementById('edit-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            } else if (provider.type === 'opencode') {
+                provider.workspace_id = document.getElementById('edit-workspace').value;
+                provider.cookie = document.getElementById('edit-cookie-o').value;
+                provider.cdp_enabled = document.getElementById('edit-oc-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-oc-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            } else if (provider.type === 'mimo') {
+                provider.cookie = document.getElementById('edit-mimo-cookie').value;
+                provider.cdp_enabled = document.getElementById('edit-mimo-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-mimo-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            }
+
+            // 保存到后端
+            if (window.pywebview && window.pywebview.api) {
+                try {
+                    await window.pywebview.api.update_provider(selectedProviderId, provider);
+                    renderProviders();
+                } catch (error) {
+                    console.error('保存失败:', error);
+                }
+            }
+        }
+
+        async function launchCdp(type) {
+            let port = 9222;
+            let url = '';
+
+            if (type === 'zhipu') {
+                port = parseInt(document.getElementById('edit-cdp-port').value);
+                url = 'https://bigmodel.cn/coding-plan/team/usage-stats';
+            } else if (type === 'opencode') {
+                port = parseInt(document.getElementById('edit-oc-cdp-port').value);
+                url = 'https://opencode.ai';
+            } else if (type === 'mimo') {
+                port = parseInt(document.getElementById('edit-mimo-cdp-port').value);
+                url = 'https://platform.xiaomimimo.com/console/plan-manage';
+            }
+
+            if (window.pywebview && window.pywebview.api) {
+                const result = await window.pywebview.api.launch_cdp_chrome(port, url);
+                if (result.success) {
+                    alert(`已启动调试 Chrome\n端口: ${port}\n请在新窗口中登录`);
+                } else {
+                    alert(`启动失败: ${result.error}`);
+                }
+            }
+        }
+
+        async function saveAll() {
+            if (!window.pywebview || !window.pywebview.api) {
+                return;
+            }
+            
+            try {
+                const updates = {
+                    providers: config.providers || [],
+                    refresh_interval: parseInt(document.getElementById('refresh-interval').value) || 60,
+                    opacity: parseInt(document.getElementById('opacity').value) / 100 || 0.92
+                };
+                
+                await window.pywebview.api.save_config(updates);
+                closeWindow();
+            } catch (error) {
+                console.error('保存失败:', error);
+            }
+        }
+
+        function closeWindow() {
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.close_settings();
+            }
+        }
+
+        // 绑定按钮事件
+        document.getElementById('btn-save').addEventListener('click', saveAll);
+        document.getElementById('btn-cancel').addEventListener('click', closeWindow);
+        
+        // 透明度滑块实时预览
+        document.getElementById('opacity').addEventListener('input', function() {
+            document.getElementById('opacity-value').textContent = this.value + '%';
+            // 实时应用透明度
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.set_opacity(parseInt(this.value) / 100);
+            }
+        });
+
+        // 加载配置
+        window.addEventListener('pywebviewready', function() {
+            loadConfig();
+        });
+        
+        // 备用：延迟加载
+        setTimeout(function() {
+            if (window.pywebview && window.pywebview.api) {
+                loadConfig();
+            }
+        }, 500);
+    </script>
+</body>
+</html>

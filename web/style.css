@@ -1,0 +1,577 @@
+:root {
+    --panel-width: 420px;
+    --bg-primary: rgba(20, 20, 24, 245);
+    --bg-card: rgba(255, 255, 255, 0.045);
+    --bg-card-hover: rgba(255, 255, 255, 0.08);
+    --bg-bar: rgba(255, 255, 255, 0.08);
+    --bg-btn: #2c2c33;
+    --bg-btn-hover: #3a3a44;
+    --text-primary: #f2f2f4;
+    --text-secondary: #c2c2c8;
+    --text-dim: #6e6e74;
+    --text-label: #8a8a90;
+    --color-green: #3fb950;
+    --color-yellow: #f0a020;
+    --color-red: #f85149;
+    --color-blue: #3b82f6;
+    --color-purple: #a855f7;
+    --color-orange: #ff6900;
+    --radius-container: 18px;
+    --radius-card: 13px;
+    --radius-badge: 12px;
+    --radius-bar: 3px;
+    --radius-btn: 7px;
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.3s ease;
+    --transition-smooth: 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html {
+    width: fit-content;
+    height: fit-content;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: transparent;
+    color: var(--text-primary);
+    overflow: hidden;
+    user-select: none;
+    -webkit-app-region: drag;
+    width: fit-content;
+    height: fit-content;
+}
+
+.container {
+    background: var(--bg-primary);
+    border-radius: var(--radius-container);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+    transition: border-color var(--transition-fast);
+    width: var(--panel-width);
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    -webkit-app-region: drag;
+}
+
+body.top-mode .container {
+    width: var(--panel-width);
+}
+
+.container:hover {
+    border-color: rgba(59, 130, 246, 0.2);
+}
+
+/* 标题栏 */
+.titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 15px 6px;
+    -webkit-app-region: drag;
+}
+
+.app-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
+}
+
+.titlebar-actions {
+    display: flex;
+    gap: 4px;
+    -webkit-app-region: no-drag;
+}
+
+.icon-btn {
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+}
+
+.icon-btn:hover {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--color-blue);
+}
+
+.icon-btn:active {
+    background: rgba(59, 130, 246, 0.25);
+}
+
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.icon-btn.active {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--color-blue);
+}
+
+/* 卡片容器 */
+.cards-container {
+    flex: 0 0 auto;
+    padding: 0 8px 8px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cards-container::-webkit-scrollbar {
+    width: 4px;
+}
+
+.cards-container::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cards-container::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+/* 卡片 */
+.card {
+    background: var(--bg-card);
+    border-radius: var(--radius-card);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    padding: 13px;
+    transition: all var(--transition-fast);
+    animation: fadeIn 0.3s ease forwards;
+}
+
+.card:hover {
+    background: var(--bg-card-hover);
+    border-color: rgba(59, 130, 246, 0.15);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* 卡片头部 */
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 9px;
+}
+
+.badge {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-badge);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+}
+
+.badge-zhipu { background: var(--color-blue); }
+.badge-opencode { background: var(--color-purple); }
+.badge-mimo { background: var(--color-orange); }
+
+.card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.card-level {
+    font-size: 10px;
+    color: var(--color-blue);
+    background: rgba(110, 140, 255, 0.14);
+    padding: 2px 6px;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-ok { background: var(--color-green); }
+.status-empty { background: var(--color-yellow); }
+.status-error { background: var(--color-red); }
+.status-loading { background: #6b7280; }
+
+/* 卡片内容 */
+.card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+
+/* 用量项 */
+.usage-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.usage-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.usage-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 60px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 7px;
+    background: var(--bg-bar);
+    border-radius: var(--radius-bar);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: var(--radius-bar);
+    transition: width var(--transition-smooth);
+    background: var(--color-green);
+}
+
+.progress-fill.warning { background: var(--color-yellow); }
+.progress-fill.danger { background: var(--color-red); }
+
+.usage-percent {
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 40px;
+    text-align: right;
+    color: var(--color-green);
+}
+
+.usage-percent.warning { color: var(--color-yellow); }
+.usage-percent.danger { color: var(--color-red); }
+
+.usage-note {
+    font-size: 10px;
+    color: var(--text-dim);
+    padding-left: 68px;
+}
+
+/* 错误状态 */
+.error-message {
+    color: var(--color-yellow);
+    font-size: 11px;
+    padding: 4px 0;
+    word-break: break-all;
+}
+
+/* 空状态 */
+.empty-tip {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--text-label);
+    font-size: 11px;
+}
+
+/* 加载状态 */
+.loading {
+    display: none;
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--text-label);
+    font-size: 11px;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.loading.active {
+    display: flex;
+}
+
+.loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: var(--color-blue);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Resize 手柄 */
+.resize-grip {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.resize-grip:hover {
+    opacity: 1;
+    background: rgba(110, 140, 255, 0.18);
+    border-radius: 3px;
+}
+
+/* 简单模式 */
+.compact .progress-bar,
+.compact .usage-note {
+    display: none;
+}
+
+.compact .usage-percent {
+    min-width: auto;
+    text-align: left;
+    background: transparent;
+    padding: 0;
+}
+
+.compact .usage-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: 7px;
+    padding: 3px 6px;
+}
+
+.compact .usage-label {
+    min-width: 0;
+}
+
+/* 简单模式 - 摘要信息，窗口高度跟随内容收缩 */
+body.compact .container {
+    width: var(--panel-width);
+    height: auto;
+}
+
+body.compact.top-mode .container {
+    width: var(--panel-width);
+}
+
+body.compact .titlebar {
+    padding: 8px 12px 4px;
+}
+
+body.compact .app-title {
+    font-size: 11px;
+}
+
+body.compact .cards-container {
+    padding: 0 6px 6px;
+    gap: 4px;
+}
+
+body.compact .card {
+    padding: 8px;
+    border-radius: 10px;
+}
+
+body.compact .card-header {
+    margin-bottom: 5px;
+    gap: 6px;
+}
+
+body.compact .badge {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+    border-radius: 9px;
+}
+
+body.compact .card-title {
+    font-size: 11px;
+}
+
+body.compact .card-level {
+    font-size: 9px;
+    padding: 1px 5px;
+}
+
+body.compact .card-body {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+body.compact .usage-item {
+    display: inline-flex;
+    gap: 0;
+}
+
+body.compact .usage-row {
+    white-space: nowrap;
+}
+
+body.compact .usage-label {
+    font-size: 9px;
+    min-width: 0;
+}
+
+body.compact .progress-bar {
+    display: none;
+}
+
+body.compact .usage-percent {
+    font-size: 10px;
+    min-width: 0;
+}
+
+body.compact .usage-note {
+    display: none;
+}
+
+body.compact .resize-grip {
+    width: 10px;
+    height: 10px;
+}
+
+/* Dock 模式 - 条状窗口（隐藏供应商名） */
+body.dock-mode {
+    overflow: hidden;
+}
+
+body.dock-mode .container {
+    height: 100vh;
+    border-radius: 0;
+}
+
+body.dock-mode .titlebar {
+    padding: 4px 12px 2px;
+}
+
+body.dock-mode .cards-container {
+    flex-direction: row;
+    gap: 4px;
+    padding: 0 4px 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+body.dock-mode .card {
+    padding: 6px 10px;
+    border-radius: 6px;
+    min-width: max-content;
+}
+
+body.dock-mode .card-header {
+    display: none;
+}
+
+body.dock-mode .card-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: nowrap;
+}
+
+body.dock-mode .usage-item {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    min-width: max-content;
+}
+
+body.dock-mode .usage-label {
+    font-size: 11px;
+    font-weight: 500;
+    min-width: 40px;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+body.dock-mode .progress-bar {
+    height: 6px;
+    min-width: 50px;
+    width: 60px;
+}
+
+body.dock-mode .usage-percent {
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 35px;
+    white-space: nowrap;
+}
+
+body.dock-mode .usage-note {
+    display: none;
+}
+
+body.dock-mode .resize-grip {
+    display: none;
+}
+
+body.dock-mode .empty-tip,
+body.dock-mode .loading {
+    display: none;
+}
+
+/* 响应式布局 */
+@media (max-width: 800px) {
+    body.dock-mode .progress-bar {
+        width: 40px;
+        min-width: 30px;
+    }
+    
+    body.dock-mode .usage-label {
+        font-size: 10px;
+        min-width: 30px;
+    }
+    
+    body.dock-mode .usage-percent {
+        font-size: 11px;
+        min-width: 30px;
+    }
+}
+
+@media (max-width: 600px) {
+    body.dock-mode .card-header {
+        display: none;
+    }
+    
+    body.dock-mode .card {
+        padding: 4px 8px;
+    }
+    
+    body.dock-mode .progress-bar {
+        width: 30px;
+        min-width: 20px;
+    }
+}
