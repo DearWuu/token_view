@@ -504,9 +504,7 @@ class Api:
             # 保存配置
             config.save(self.cfg)
 
-            # 销毁所有窗口，WinForms 事件循环会自动 Application.Exit()
-            #（winforms.py:397-398 在最后一个实例销毁时调 _shutdown），
-            # 避免 os._exit 跳过 .NET 清理导致 Error 1411。
+            # 销毁所有窗口
             if self.window:
                 try:
                     self.window.destroy()
@@ -517,6 +515,13 @@ class Api:
                     self._settings_window.destroy()
                 except Exception:
                     pass
+
+            # Windows: destroy() → winforms.py Application.Exit() 自动退出事件循环
+            # macOS: Cocoa 事件循环不会自动退出，必须强制 terminate
+            import platform
+            if platform.system() == 'Darwin':
+                import os
+                os._exit(0)
 
             return True
         except Exception as e:

@@ -39,7 +39,8 @@ function desiredPanelWidth() {
     if (state.topMode) {
         // topMode 下用视口 CSS 像素宽度，避免把 Python 端返回的逻辑像素
         //（含 DPI 缩放）当成 CSS 像素，导致 container 宽度超出视口右边被裁。
-        return Math.max(window.innerWidth, PANEL_WIDTH);
+        // 同时加 1400 上限，避免全屏铺满太宽（4K 下 2500+ 太长）。
+        return Math.max(Math.min(window.innerWidth, 2500), PANEL_WIDTH);
     }
     return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
 }
