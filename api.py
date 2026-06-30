@@ -501,16 +501,12 @@ class Api:
     def quit_app(self) -> bool:
         """退出应用程序。"""
         try:
-            import webview
-            import os
-            import sys
-            import threading
-
             # 保存配置
             config.save(self.cfg)
 
-            # 先销毁窗口（让 WinForms/WebView2 正常清理句柄），
-            # 再延迟硬退出，避免 os._exit 跳过 .NET 清理导致窗口残留。
+            # 销毁所有窗口，WinForms 事件循环会自动 Application.Exit()
+            #（winforms.py:397-398 在最后一个实例销毁时调 _shutdown），
+            # 避免 os._exit 跳过 .NET 清理导致 Error 1411。
             if self.window:
                 try:
                     self.window.destroy()
@@ -522,7 +518,6 @@ class Api:
                 except Exception:
                     pass
 
-            threading.Timer(0.1, lambda: os._exit(0)).start()
             return True
         except Exception as e:
             log(f"退出应用失败: {e}")
