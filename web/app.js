@@ -251,15 +251,8 @@ async function moveToTop() {
         elements.btnTop.classList.toggle('active', ok);
         setTimeout(() => elements.btnTop.classList.remove('active'), 700);
         if (ok) {
-            // 延迟等 WebView2 完成重布局，用新的 innerWidth（CSS 像素）
-            // 做 desiredPanelWidth，确保 --panel-width 与视口一致。
+            // 延迟等 WebView2 完成重布局
             scheduleWindowFit(220);
-        // 置顶后把宽度缩小 40px（最小到 260），高度保持内容高度
-        setTimeout(async () => {
-            const size = measurePanelSize();
-            const narrowW = Math.max(260, size.width - 100);
-            await window.pywebview.api.resize_window_to_content(narrowW, size.height);
-        }, 300);
         }
     }
 }
@@ -304,6 +297,11 @@ async function closeWindow() {
 
 // 初始化
 async function init() {
+    // 检测平台，Windows 上禁用透明
+    if (navigator.platform.indexOf('Win') !== -1 || navigator.userAgent.indexOf('Windows') !== -1) {
+        document.body.classList.add('no-transparent');
+    }
+    
     // 绑定按钮事件
     elements.btnRefresh.addEventListener('click', refresh);
     elements.btnTop.addEventListener('click', moveToTop);

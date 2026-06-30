@@ -365,19 +365,13 @@ class Api:
             return {"ok": False}
 
     def _resize_window_macos(self, width: int, height: int) -> bool:
-        """macOS 原生缩放，保持窗口左上角不动。"""
+        """macOS 窗口缩放 - 使用 pywebview 标准方法。"""
         try:
-            native = getattr(self.window, "native", None)
-            if native is None:
-                return False
-
-            frame = native.frame()
-            top = frame.origin.y + frame.size.height
-            frame.size.width = width
-            frame.size.height = height
-            frame.origin.y = top - height
-            native.setFrame_display_(frame, True)
-            self.cfg["geometry"] = [int(frame.origin.x), int(frame.origin.y), width, height]
+            # 直接使用 pywebview 的 resize 方法，避免线程问题
+            self.window.resize(width, height)
+            x = int(getattr(self.window, "x", 0) or 0)
+            y = int(getattr(self.window, "y", 0) or 0)
+            self.cfg["geometry"] = [x, y, width, height]
             config.save(self.cfg)
             log(f"macOS 窗口已按内容缩放: w={width}, h={height}")
             return True
@@ -386,35 +380,49 @@ class Api:
             return False
 
     def _move_window_to_top_macos(self, width: int = 0, height: int = 0):
-        """macOS 原生路径：用 NSWindow 当前屏幕的可见区域计算顶部条位置。"""
+        """macOS 路径：移动窗口到屏幕顶部。"""
         try:
-            native = getattr(self.window, "native", None)
-            if native is None:
+            import webview
+            
+            # 使用 pywebview 的 screens 获取屏幕信息
+            screens = webview.screens
+            if not screens:
                 return False
-
-            screen = native.screen()
+            
+            # 获取当前窗口位置
+            x = int(getattr(self.window, "x", 0) or 0)
+            y = int(getattr(self.window, "y", 0) or 0)
+            w = int(getattr(self.window, "width", 0) or 0)
+            h = max(80, int(height or getattr(self.window, "height", 0) or 0))
+            
+            # 找到当前窗口所在的屏幕
+            screen = None
+            cx = x + w // 2
+            cy = y + h // 2
+            for item in screens:
+                in_x = item.x <= cx < item.x + item.width
+                in_y = item.y <= cy < item.y + item.height
+                if in_x and in_y:
+                    screen = item
+                    break
             if screen is None:
-                from Cocoa import NSScreen
-                screen = NSScreen.mainScreen()
-            if screen is None:
-                return False
-
-            visible = screen.visibleFrame()
-            frame = native.frame()
-            margin = min(40, max(0, int(visible.size.width) // 30))
+                screen = screens[0]
+            
+            # 计算新位置和大小
+            margin = min(40, max(0, screen.width // 30))
             top_margin = 36
-            available_w = int(visible.size.width) - margin * 2
-            w = max(320, available_w)
-            h = max(80, int(height or frame.size.height))
-            h = min(h, max(80, int(visible.size.height) - top_margin))
-            frame.origin.x = visible.origin.x + margin
-            frame.origin.y = visible.origin.y + visible.size.height - h - top_margin
-            frame.size.width = w
-            frame.size.height = h
-            native.setFrame_display_(frame, True)
-            self.cfg["geometry"] = [int(margin), 0, w, h]
+            w = max(320, screen.width - margin * 2)
+            h = min(h, max(80, screen.height - top_margin))
+            x = screen.x + margin
+            y = screen.y + top_margin
+            
+            # 使用 pywebview 的 move 和 resize 方法
+            self.window.resize(w, h)
+            self.window.move(x, y)
+            
+            self.cfg["geometry"] = [x, y, w, h]
             config.save(self.cfg)
-            log(f"macOS 窗口已放大并移动到顶部: x={int(frame.origin.x)}, y={int(frame.origin.y)}, w={w}, h={h}")
+            log(f"macOS 窗口已放大并移动到顶部: x={x}, y={y}, w={w}, h={h}")
             return {"ok": True, "width": w, "height": h}
         except Exception as e:
             log(f"macOS 移动窗口到顶部失败: {e}")
