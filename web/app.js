@@ -37,7 +37,9 @@ function formatReset(note) {
 
 function desiredPanelWidth() {
     if (state.topMode) {
-        return Math.max(state.topWidth || window.innerWidth, PANEL_WIDTH);
+        // topMode 下用视口 CSS 像素宽度，避免把 Python 端返回的逻辑像素
+        //（含 DPI 缩放）当成 CSS 像素，导致 container 宽度超出视口右边被裁。
+        return Math.max(window.innerWidth, PANEL_WIDTH);
     }
     return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
 }
@@ -50,22 +52,27 @@ function measurePanelSize() {
     applyPanelWidth();
     const container = document.querySelector('.container');
     const cards = elements.container;
-    const rect = container.getBoundingClientRect();
     const width = desiredPanelWidth();
     const titleHeight = Math.ceil(elements.titlebar.getBoundingClientRect().height);
+
+    // 临时解除 cards-container 的高度约束和滚动，让 scrollHeight 只反映
+    // 卡片真实内容高度，避免被窗口当前尺寸污染（Windows WebView2 下
+    // overflow:auto 的元素 scrollHeight 会跟着窗口增长，导致反馈循环）。
+    const prevMaxHeight = cards.style.maxHeight;
+    const prevHeight = cards.style.height;
+    const prevOverflow = cards.style.overflowY;
+    cards.style.maxHeight = 'none';
+    cards.style.height = 'auto';
+    cards.style.overflowY = 'visible';
     const cardsHeight = Math.ceil(cards.scrollHeight);
+    cards.style.maxHeight = prevMaxHeight;
+    cards.style.height = prevHeight;
+    cards.style.overflowY = prevOverflow;
+
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
     const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
-    const contentHeight = Math.max(
-        summedHeight,
-        container.scrollHeight,
-        container.offsetHeight,
-        rect.height,
-        document.body.scrollHeight,
-        document.documentElement.scrollHeight
-    );
-    const height = Math.ceil(contentHeight + WINDOW_HEIGHT_PADDING);
+    const height = Math.ceil(summedHeight + WINDOW_HEIGHT_PADDING);
     return {
         width,
         height: Math.max(80, height)
@@ -236,20 +243,23 @@ async function toggleCompact() {
 async function moveToTop() {
     if (window.pywebview && window.pywebview.api) {
         state.topMode = true;
-        state.topWidth = null;
         applyPanelWidth();
         document.body.classList.add('top-mode');
         const size = measurePanelSize();
         const result = await window.pywebview.api.move_window_to_top(0, size.height);
         const ok = typeof result === 'object' ? result.ok : result;
-        if (typeof result === 'object' && result.width) {
-            state.topWidth = result.width;
-            applyPanelWidth();
-        }
         elements.btnTop.classList.toggle('active', ok);
         setTimeout(() => elements.btnTop.classList.remove('active'), 700);
         if (ok) {
+            // 延迟等 WebView2 完成重布局，用新的 innerWidth（CSS 像素）
+            // 做 desiredPanelWidth，确保 --panel-width 与视口一致。
             scheduleWindowFit(220);
+        // 置顶后把宽度缩小 40px（最小到 260），高度保持内容高度
+        setTimeout(async () => {
+            const size = measurePanelSize();
+            const narrowW = Math.max(260, size.width - 100);
+            await window.pywebview.api.resize_window_to_content(narrowW, size.height);
+        }, 300);
         }
     }
 }
@@ -259,6 +269,7 @@ async function toggleOnTop() {
     if (window.pywebview && window.pywebview.api) {
         state.onTop = await window.pywebview.api.toggle_on_top();
         elements.btnPin.classList.toggle('active', state.onTop);
+        scheduleWindowFit();
     }
 }
 

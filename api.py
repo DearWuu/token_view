@@ -290,7 +290,7 @@ class Api:
             if not self.window:
                 return {"ok": False}
 
-            width = max(260, min(1800, int(width)))
+            width = max(260, int(width))
             height = max(80, min(1200, int(height)))
 
             import platform
@@ -326,7 +326,7 @@ class Api:
             y = int(getattr(self.window, "y", 0) or 0)
             w = int(getattr(self.window, "width", 0) or 0)
             h = max(80, int(height or getattr(self.window, "height", 0) or 0))
-            screens = webview.screens()
+            screens = webview.screens
             screen = None
 
             if screens and w and h:
@@ -496,12 +496,25 @@ class Api:
             import webview
             import os
             import sys
-            
+            import threading
+
             # 保存配置
             config.save(self.cfg)
-            
-            # 强制退出
-            os._exit(0)
+
+            # 先销毁窗口（让 WinForms/WebView2 正常清理句柄），
+            # 再延迟硬退出，避免 os._exit 跳过 .NET 清理导致窗口残留。
+            if self.window:
+                try:
+                    self.window.destroy()
+                except Exception:
+                    pass
+            if hasattr(self, '_settings_window') and self._settings_window:
+                try:
+                    self._settings_window.destroy()
+                except Exception:
+                    pass
+
+            threading.Timer(0.1, lambda: os._exit(0)).start()
             return True
         except Exception as e:
             log(f"退出应用失败: {e}")

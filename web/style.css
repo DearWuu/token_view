@@ -39,7 +39,7 @@ html {
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: transparent;
+    background: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
     user-select: none;

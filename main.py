@@ -100,6 +100,11 @@ def main():
     # 保存窗口引用到 API
     api.window = window
     
+    # Windows 上 pywebview 的 get_functions 会递归遍历 api.window.native
+    #（.NET WinForms Form），导致 COM 无限递归崩溃。标记不可遍历以避开。
+    if platform.system() == 'Windows':
+        window._serializable = False
+    
     # 窗口关闭回调
     def on_closed():
         try:
