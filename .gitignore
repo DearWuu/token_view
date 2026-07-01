@@ -28,3 +28,5 @@ opencode_debug.html
 # OS
 Thumbs.db
 Desktop.ini
+
+build_macos.sh
