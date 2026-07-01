@@ -471,19 +471,22 @@ body.compact.top-mode .card {
 }
 
 body.compact.top-mode .card-header {
-    flex: 0 1 180px;
-    min-width: 90px;
+    flex: 0 0 160px;
+    min-width: 88px;
 }
 
 body.compact.top-mode .card-body {
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+    overflow: visible;
 }
 
 body.compact.top-mode .usage-item {
-    flex: 1 1 64px;
+    width: 100%;
+    flex: initial;
     max-width: none;
-    min-width: 52px;
+    min-width: 0;
     padding: 3px 8px;
 }
 

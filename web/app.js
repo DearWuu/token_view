@@ -255,8 +255,6 @@ function applyProviderUpdates(providers) {
             delete state.cards[id];
         }
     });
-
-    scheduleWindowFit();
 }
 
 // 更新单个卡片
@@ -357,7 +355,6 @@ async function toggleOnTop() {
     if (window.pywebview && window.pywebview.api) {
         state.onTop = await window.pywebview.api.toggle_on_top();
         elements.btnPin.classList.toggle('active', state.onTop);
-        scheduleWindowFit();
     }
 }
 
