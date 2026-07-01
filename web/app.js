@@ -111,7 +111,8 @@ function measurePanelSize() {
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
     const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
-    const height = Math.ceil(summedHeight + WINDOW_HEIGHT_PADDING);
+    const containerHeight = Math.ceil(container.scrollHeight || 0);
+    const height = Math.ceil(Math.max(summedHeight, containerHeight) + WINDOW_HEIGHT_PADDING);
     const measuredWidth = Math.ceil(container.getBoundingClientRect().width || cssWidth);
     return {
         width: nativeWidthForCss(measuredWidth),
