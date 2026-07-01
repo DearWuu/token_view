@@ -7,6 +7,7 @@ const state = {
     dock: false,
     topMode: false,
     topWidth: null,
+    manualWidth: null,
     onTop: true,
     refreshInterval: 60000,
     timer: null,
@@ -73,6 +74,9 @@ function desiredPanelWidth() {
         }
         return Math.max(window.innerWidth || PANEL_WIDTH, PANEL_WIDTH);
     }
+    if (state.manualWidth) {
+        return state.manualWidth;
+    }
     return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
 }
 
@@ -132,6 +136,11 @@ function fitWindowOnce(delay = 0, token = state.fitToken) {
                 }
                 const size = measurePanelSize();
                 await window.pywebview.api.resize_window_to_content(size.width, size.height);
+                // resize 后窗口真实高度变了，dock 隐藏的 y 坐标需要重新计算
+                // 否则 set_dock_hidden 用的是 fit 前的旧 h，会算错 y 导致完全隐藏
+                if (state.dockMode && state.dockHidden) {
+                    window.pywebview.api.set_dock_hidden(true);
+                }
             });
         });
     }, delay);
@@ -251,8 +260,6 @@ function applyProviderUpdates(providers) {
             delete state.cards[id];
         }
     });
-
-    scheduleWindowFit();
 }
 
 // 更新单个卡片
@@ -302,6 +309,7 @@ async function toggleCompact() {
     state.compact = !state.compact;
     state.topMode = false;
     state.topWidth = null;
+    state.manualWidth = null;
     state.widthScale = 1;
     document.body.classList.toggle('compact', state.compact);
     document.body.classList.remove('top-mode');
@@ -321,6 +329,7 @@ async function moveToTop() {
     if (window.pywebview && window.pywebview.api) {
         state.topMode = true;
         state.topWidth = null;
+        state.manualWidth = null;
         state.widthScale = 1;
         applyPanelWidth();
         document.body.classList.add('top-mode');
@@ -346,12 +355,80 @@ async function moveToTop() {
     }
 }
 
+// 切换 auto-hide dock 模式（替换原"顶部模式"按钮行为）
+// 启用：移到屏幕顶部 + 鼠标离开窗口自动滑出（露 4px 缝）
+// 关闭：窗口回到原位（恢复 pre-dock geometry）
+async function toggleDock() {
+    if (!window.pywebview || !window.pywebview.api) return;
+    const willEnable = !state.dockMode;
+    if (willEnable) {
+        await moveToTop();
+        state.dockMode = true;
+        document.body.classList.add('dock-mode');
+        document.body.classList.remove('dock-hidden');  // 初始先显示
+        elements.btnTop.classList.add('active');
+        scheduleWindowFit(220);
+    } else {
+        state.dockMode = false;
+        document.body.classList.remove('dock-mode');
+        document.body.classList.remove('dock-hidden');
+        elements.btnTop.classList.remove('active');
+        // 恢复窗口到原位
+        await window.pywebview.api.restore_window();
+        state.topMode = false;
+        state.topWidth = null;
+        document.body.classList.remove('top-mode');
+        applyPanelWidth();
+        scheduleWindowFit(80);
+    }
+}
+
+// auto-hide 行为：mouseenter 立即显示，mouseleave 走 200ms 延迟
+// （避免 WebView2 在 set_dock_hidden 改 y 后重派 mouseenter/mouseleave
+// 造成死循环）。
+// 物理位置通过 api.set_dock_hidden(true/false) 切，CSS 只负责 cursor 指示。
+function setupDockAutoHide() {
+    let leaveTimer = null;
+    const setHidden = (hidden) => {
+        if (!state.dockMode) return;
+        if (state.dockHidden === hidden) return;       // 去重
+        state.dockHidden = hidden;
+        document.body.classList.toggle('dock-hidden', hidden);
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.set_dock_hidden(hidden);
+        }
+    };
+    document.addEventListener('mouseenter', () => {
+        if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
+        setHidden(false);
+    }, true);
+    document.addEventListener('mouseleave', () => {
+        if (leaveTimer) clearTimeout(leaveTimer);
+        leaveTimer = setTimeout(() => {
+            leaveTimer = null;
+            setHidden(true);
+        }, 200);
+    }, true);
+    document.addEventListener('mousemove', (e) => {
+        // 用 screenY（屏幕绝对坐标）判断是否接近屏幕顶部。
+        // clientY 是 WebView 内部坐标，y=-240 时屏幕 y=0 对应 clientY=240，< 4 不成立
+        if (state.dockMode && state.dockHidden && e.screenY < 4) {
+            setHidden(false);
+        }
+    });
+}
+
+// 假透明度：改 --opacity-primary CSS 变量，背景透、文字/进度条保持清晰。
+function applyWindowOpacity(alpha) {
+    const a = Math.max(0.3, Math.min(1.0, Number(alpha) || 0.92));
+    document.documentElement.style.setProperty('--opacity-primary', String(a));
+}
+
 // 切换置顶
 async function toggleOnTop() {
     if (window.pywebview && window.pywebview.api) {
         state.onTop = await window.pywebview.api.toggle_on_top();
         elements.btnPin.classList.toggle('active', state.onTop);
-        scheduleWindowFit();
     }
 }
 
@@ -384,6 +461,82 @@ async function closeWindow() {
     }
 }
 
+// ---- 手动拖拽缩放 ----
+// 无边框窗口需要 JS 手动处理 8 个方向的缩放
+const resizeState = { dragging: false, dir: '', startX: 0, startY: 0, startW: 0, startH: 0, startWinX: 0, startWinY: 0 };
+
+function startResize(e, dir) {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeState.dragging = true;
+    resizeState.dir = dir;
+    resizeState.startX = e.screenX;
+    resizeState.startY = e.screenY;
+    resizeState.startW = window.innerWidth;
+    resizeState.startH = window.innerHeight;
+    resizeState.startWinX = window.screenX;
+    resizeState.startWinY = window.screenY;
+    document.addEventListener('mousemove', onResizeMove);
+    document.addEventListener('mouseup', onResizeEnd);
+}
+
+function onResizeMove(e) {
+    if (!resizeState.dragging) return;
+    const dx = e.screenX - resizeState.startX;
+    const dy = e.screenY - resizeState.startY;
+    const d = resizeState.dir;
+    let newW = resizeState.startW;
+    let newH = resizeState.startH;
+    let newX = resizeState.startWinX;
+    let newY = resizeState.startWinY;
+
+    if (d.includes('e')) newW = resizeState.startW + dx;
+    if (d.includes('s')) newH = resizeState.startH + dy;
+    if (d.includes('w')) { newW = resizeState.startW - dx; newX = resizeState.startWinX + dx; }
+    if (d.includes('n')) { newH = resizeState.startH - dy; newY = resizeState.startWinY + dy; }
+
+    newW = Math.max(260, Math.min(newW, 2000));
+    newH = Math.max(80, Math.min(newH, 1200));
+
+    // 同步更新 CSS --panel-width，让内容跟着窗口宽度 reflow
+    state.manualWidth = newW;
+    applyPanelWidth();
+
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.resize_window_to_content(newW, newH);
+        if (newX !== resizeState.startWinX || newY !== resizeState.startWinY) {
+            window.pywebview.api.move_window(newX, newY);
+        }
+    }
+}
+
+function onResizeEnd() {
+    resizeState.dragging = false;
+    document.removeEventListener('mousemove', onResizeMove);
+    document.removeEventListener('mouseup', onResizeEnd);
+    // 不调 scheduleWindowFit —— 手动缩放后保留用户设定的尺寸，
+    // manualWidth 已在 onResizeMove 中设置，desiredPanelWidth 会优先使用它
+}
+
+function initResizeHandles() {
+    const handles = [
+        ['resize-grip', 'se'],
+        ['resize-e', 'e'],
+        ['resize-s', 's'],
+        ['resize-w', 'w'],
+        ['resize-n', 'n'],
+        ['resize-ne', 'ne'],
+        ['resize-nw', 'nw'],
+        ['resize-sw', 'sw'],
+    ];
+    handles.forEach(([id, dir]) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('mousedown', (e) => startResize(e, dir));
+        }
+    });
+}
+
 // 初始化
 async function init() {
     // 检测平台，Windows 上禁用透明
@@ -393,11 +546,17 @@ async function init() {
     
     // 绑定按钮事件
     elements.btnRefresh.addEventListener('click', refresh);
-    elements.btnTop.addEventListener('click', moveToTop);
+    elements.btnTop.addEventListener('click', toggleDock);
     elements.btnMode.addEventListener('click', toggleCompact);
     elements.btnPin.addEventListener('click', toggleOnTop);
     elements.btnSettings.addEventListener('click', openSettings);
     elements.btnClose.addEventListener('click', closeWindow);
+
+    // 绑定缩放手柄
+    initResizeHandles();
+
+    // 启动 auto-hide dock 行为监听
+    setupDockAutoHide();
 
     // 加载配置
     if (window.pywebview && window.pywebview.api) {
@@ -406,11 +565,14 @@ async function init() {
             state.compact = cfg.compact ?? false;
             state.dock = false;
             state.topMode = false;
+            state.dockMode = false;
+            state.dockHidden = false;
             state.topWidth = null;
             state.onTop = cfg.always_on_top !== false;
             state.opacity = cfg.opacity || 0.92;
+            applyWindowOpacity(state.opacity);
             await window.pywebview.api.set_top_mode(false);
-            
+
             // 设置模式
             document.body.classList.toggle('compact', state.compact);
             document.body.classList.remove('dock-mode');
@@ -419,7 +581,7 @@ async function init() {
             elements.btnMode.classList.toggle('active', state.compact);
             elements.btnMode.textContent = state.compact ? '⤢' : '⤡';
             elements.btnPin.classList.toggle('active', state.onTop);
-            
+
             // 启动定时刷新
             startAutoRefresh(cfg.refresh_interval * 1000 || 60000);
         } catch (error) {

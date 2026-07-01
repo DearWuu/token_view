@@ -126,9 +126,23 @@ class Api:
         return new_state
 
     def set_opacity(self, opacity: float) -> bool:
+        """更新透明度：保存 cfg + 通知前端 CSS 变量。
+
+        实际窗口层 alpha 不动（避免 WS_EX_LAYERED 整窗 alpha 把文字/进度条
+        一起淡化的副作用）。前端 applyWindowOpacity 改 --bg-primary 的
+        rgba alpha，背景透、文字清晰。
+        """
+        opacity = max(0.3, min(1.0, float(opacity)))
         settings_api.set_opacity(self.cfg, opacity)
+        # 通知主窗口前端应用新透明度
         if self.window is not None:
-            window_helper.set_opacity(self.window, opacity)
+            try:
+                self.window.evaluate_js(
+                    f"if(typeof applyWindowOpacity==='function')"
+                    f"applyWindowOpacity({opacity});"
+                )
+            except (OSError, RuntimeError) as e:
+                log(f"通知前端透明度失败: {e}")
         return True
 
     def set_geometry(self, x: int, y: int, w: int, h: int) -> bool:
@@ -149,11 +163,32 @@ class Api:
         return window_helper.resize_to_content(
             self.window, self._top_mode_width, width, height)
 
+    def resize_window(self, x: int = -1, y: int = -1,
+                      width: int = 0, height: int = 0) -> dict:
+        """用户拖 8 方向 resize handle 时由前端调用，CSS 逻辑像素。
+
+        x/y = -1 表示该方向不动；>=0 时连位置一起改（拖左/上/左上/左下 时）。
+        """
+        return window_helper.user_resize(
+            self.window, x, y, width, height)
+
+    def move_window(self, x: int, y: int) -> bool:
+        """只改窗口位置，不改大小。"""
+        return window_helper.move_window(self.window, x, y)
+
     def move_window_to_top(self, width: int = 0, height: int = 0) -> dict:
         result = window_helper.move_to_top(self.window, self.cfg, height)
         if result.get("ok") and result.get("width"):
             self._top_mode_width = result["width"]
         return result
+
+    def restore_window(self) -> dict:
+        """退出 dock 时从 cfg["pre_dock_geometry"] 恢复窗口到原位。"""
+        return window_helper.restore_from_dock(self.window, self.cfg)
+
+    def set_dock_hidden(self, hidden: bool) -> dict:
+        """auto-hide dock：物理位置滑入/滑出窗口。"""
+        return window_helper.set_dock_hidden(self.window, bool(hidden))
 
     # ===================================================================
     # 模式 / 刷新

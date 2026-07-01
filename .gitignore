@@ -1,30 +1,52 @@
-# Python
+# Python 编译/缓存
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-dist/
-build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.conda/
 
 # PyInstaller
-*.spec
+build/
+dist/
+*.spec.bak
+
+# 打包产物（不在 git 里，用 git release 单独发）
+TokenView.exe
+TokenView-Installer.exe
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-# 敏感文件（含 API Key / Cookie 的探测脚本，不要提交）
+# AI 任务交接目录（本地调试用，不进 git）
+.mimocode/
+.opencode/
+.claude/
+
+# 临时 / 探针脚本
 probe.py
 probe_team.py
 test_*.py
+tmp/
+scratch.py
 
-# 配置/日志（运行时生成，在 %APPDATA% 里，不会出现在仓库）
-# 但如果有本地副本：
-debug.log
-opencode_debug.html
+# 用户敏感文件（不要提交 API Key / Cookie / 探测脚本）
+# 这些会落到 %APPDATA%/token_view/，不应进仓库
 
-# OS
-Thumbs.db
-Desktop.ini
+# 文档 / 日志
+*.log
+*.html~

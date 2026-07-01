@@ -101,21 +101,57 @@ def main():
     
     current_dir = os.path.dirname(os.path.abspath(__file__))
     html_path = os.path.join(current_dir, 'web', 'index.html')
-    
+
     is_windows = platform.system() == 'Windows'
+
+    # 窗口初始位置：屏幕右下角（任务栏托盘附近）
+    # cfg 里如果之前存过 geometry，优先用
+    saved_geom = cfg.get('geometry') if isinstance(cfg.get('geometry'), list) else None
+    if saved_geom and len(saved_geom) == 4:
+        init_x, init_y, init_w, init_h = saved_geom
+        init_w = max(260, int(init_w or 420))
+        init_h = max(80, int(init_h or 400))
+    else:
+        init_w, init_h = 420, 400
+        margin = 80
+        if is_windows:
+            try:
+                import ctypes
+                from ctypes import wintypes
+                rect = wintypes.RECT()
+                if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+                    # 转 CSS 逻辑像素
+                    scale = 1.0
+                    try:
+                        dpi = ctypes.windll.user32.GetDpiForSystem()
+                        if dpi > 0:
+                            scale = dpi / 96.0
+                    except OSError:
+                        pass
+                    work_w = int((rect.right - rect.left) / scale)
+                    work_h = int((rect.bottom - rect.top) / scale)
+                    init_x = int(rect.left / scale) + work_w - init_w - margin
+                    init_y = int(rect.top / scale) + work_h - init_h - margin
+                else:
+                    init_x, init_y = 100, 100
+            except OSError:
+                init_x, init_y = 100, 100
+        else:
+            # macOS / Linux 兜底：放右下角
+            init_x, init_y = 200, 200
 
     # 创建窗口 - 默认小面板，无边框；Windows 下透明窗口在高 DPI 上容易裁切
     window = webview.create_window(
         'Token 用量监控',
         html_path,
         js_api=api,
-        width=420,
-        height=400,
+        width=init_w,
+        height=init_h,
         min_size=(260, 80),
         on_top=True,  # 屏幕级别置顶
         resizable=True,
-        x=100,
-        y=100,
+        x=init_x,
+        y=init_y,
         frameless=True,  # 无边框
         transparent=not is_windows
     )
@@ -160,7 +196,7 @@ def main():
                 log(f"设置初始透明度失败: {e}")
     
     window.events.loaded += on_loaded
-    
+
     webview.start(debug=False)
 
 

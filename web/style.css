@@ -1,6 +1,8 @@
 :root {
     --panel-width: 420px;
-    --bg-primary: rgba(20, 20, 24, 245);
+    /* 假透明度：背景 alpha 由 --opacity-primary 控制（前端 applyWindowOpacity 改） */
+    --opacity-primary: 0.96;
+    --bg-primary: rgba(20, 20, 24, var(--opacity-primary));
     --bg-card: rgba(255, 255, 255, 0.045);
     --bg-card-hover: rgba(255, 255, 255, 0.08);
     --bg-bar: rgba(255, 255, 255, 0.08);
@@ -72,6 +74,12 @@ body.no-transparent {
 
 body.top-mode .container {
     width: min(var(--panel-width), 100vw);
+    font-size: 17px;     /* 顶部模式字号 +20%（默认 14 → 17） */
+}
+
+/* auto-hide dock 状态指示：隐藏时改 cursor */
+body.dock-mode.dock-hidden {
+    cursor: default;
 }
 
 body.top-mode:not(.compact) .cards-container {
@@ -410,13 +418,15 @@ body.top-mode:not(.compact) .usage-note {
 /* Resize 手柄 */
 .resize-grip {
     position: absolute;
-    bottom: 4px;
-    right: 4px;
-    width: 14px;
-    height: 14px;
+    bottom: 0;
+    right: 0;
+    width: 16px;
+    height: 16px;
     cursor: nwse-resize;
     opacity: 0;
     transition: opacity var(--transition-fast);
+    -webkit-app-region: no-drag;
+    z-index: 100;
 }
 
 .resize-grip:hover {
@@ -424,6 +434,25 @@ body.top-mode:not(.compact) .usage-note {
     background: rgba(110, 140, 255, 0.18);
     border-radius: 3px;
 }
+
+/* 边缘 resize 手柄 */
+.resize-edge {
+    position: absolute;
+    -webkit-app-region: no-drag;
+    z-index: 99;
+    opacity: 0;
+}
+.resize-edge:hover {
+    opacity: 1;
+    background: rgba(110, 140, 255, 0.12);
+}
+.resize-edge-e { right: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.resize-edge-s { bottom: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.resize-edge-w { left: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.resize-edge-n { top: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.resize-edge-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.resize-edge-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.resize-edge-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
 
 /* 简略模式 - 单行供应商 + 短指标 */
 body.compact .container {
@@ -450,19 +479,22 @@ body.compact.top-mode .card {
 }
 
 body.compact.top-mode .card-header {
-    flex: 0 1 180px;
-    min-width: 90px;
+    flex: 0 0 160px;
+    min-width: 88px;
 }
 
 body.compact.top-mode .card-body {
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
+    overflow: visible;
 }
 
 body.compact.top-mode .usage-item {
-    flex: 1 1 64px;
+    width: 100%;
+    flex: initial;
     max-width: none;
-    min-width: 52px;
+    min-width: 0;
     padding: 3px 8px;
 }
 
@@ -587,19 +619,29 @@ body.dock-mode .container {
 }
 
 body.dock-mode .titlebar {
-    padding: 4px 12px 2px;
+    padding: 3px 12px 2px;
+    font-size: 13px;     /* 覆盖 .container 的 17px，titlebar 字号小一些 */
+}
+body.dock-mode .app-title {
+    font-size: 13px;
+    font-weight: 600;
+}
+body.dock-mode .icon-btn {
+    width: 22px;
+    height: 22px;
+    font-size: 13px;
 }
 
 body.dock-mode .cards-container {
     flex-direction: row;
     gap: 4px;
-    padding: 0 4px 4px;
+    padding: 0 4px 2px;
     overflow-x: auto;
     overflow-y: hidden;
 }
 
 body.dock-mode .card {
-    padding: 6px 10px;
+    padding: 6px 14px;
     border-radius: 6px;
     min-width: max-content;
 }
@@ -611,35 +653,36 @@ body.dock-mode .card-header {
 body.dock-mode .card-body {
     flex-direction: row;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     flex-wrap: nowrap;
 }
 
 body.dock-mode .usage-item {
     flex-direction: row;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     min-width: max-content;
 }
 
 body.dock-mode .usage-label {
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 500;
-    min-width: 40px;
+    min-width: 48px;
     white-space: nowrap;
     color: var(--text-secondary);
 }
 
 body.dock-mode .progress-bar {
-    height: 6px;
-    min-width: 50px;
-    width: 60px;
+    height: 12px;
+    min-width: 80px;
+    width: 100px;
+    border-radius: 6px;
 }
 
 body.dock-mode .usage-percent {
-    font-size: 12px;
+    font-size: 16px;
     font-weight: 700;
-    min-width: 35px;
+    min-width: 42px;
     white-space: nowrap;
 }
 
@@ -647,7 +690,8 @@ body.dock-mode .usage-note {
     display: none;
 }
 
-body.dock-mode .resize-grip {
+body.dock-mode .resize-grip,
+body.dock-mode .resize-edge {
     display: none;
 }
 

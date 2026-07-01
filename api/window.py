@@ -21,43 +21,61 @@ from . import screen as screen_helper
 # --------------------- 置顶 ---------------------
 
 def set_always_on_top(window, on_top: bool) -> bool:
-    """切换屏幕级别置顶。macOS 走 Cocoa 窗口级别，其他走 pywebview。"""
+    """切换屏幕级别置顶。
+
+    Windows 必须用 Win32 SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)：
+    .NET Form.TopMost 设回 false 时偶发不生效（WinForms 已知行为，
+    切回需要额外 BringToFront）。pywebview.window.on_top = False
+    走的就是 Form.TopMost，所以这里绕开，直接走原生 API。
+    macOS 走 Cocoa 窗口级别。
+    """
+    if platform.system() == "Windows" and window is not None:
+        hwnd = screen_helper.window_hwnd(window)
+        if hwnd:
+            try:
+                ctypes.windll.user32.SetWindowPos(
+                    wintypes.HWND(hwnd),
+                    wintypes.HWND(-1 if on_top else -2),   # HWND_TOPMOST / HWND_NOTOPMOST
+                    0, 0, 0, 0,
+                    0x0003,                                   # SWP_NOMOVE | SWP_NOSIZE
+                )
+                log(f"Windows 屏幕置顶已{'开启' if on_top else '关闭'}")
+            except OSError as e:
+                log(f"Windows 置顶切换失败: {e}")
+        return True
+
     if platform.system() == "Darwin":
         try:
             from Cocoa import NSApplication
             from Quartz import (kCGFloatingWindowLevel,
                                kCGNormalWindowLevel)
             app = NSApplication.sharedApplication()
-            windows = app.windows()
-            if windows:
-                w = windows[0]
-                w.setLevel_(kCGFloatingWindowLevel if on_top
-                            else kCGNormalWindowLevel)
+            ns_windows = app.windows()
+            if ns_windows:
+                ns_windows[0].setLevel_(kCGFloatingWindowLevel if on_top
+                                         else kCGNormalWindowLevel)
         except ImportError as e:
             log(f"macOS 窗口级别设置失败: {e}")
+        return True
 
-    if window is not None:
-        window.on_top = on_top
-    return True
+    return False
 
 
 # --------------------- 透明度 ---------------------
 
 def set_opacity(window, opacity: float) -> bool:
-    """设置窗口透明度（0.3~1.0）。macOS 走 Cocoa alpha。"""
-    opacity = max(0.3, min(1.0, opacity))
-    if platform.system() == "Darwin" and window is not None:
-        try:
-            from Cocoa import NSApplication
-            app = NSApplication.sharedApplication()
-            windows = app.windows()
-            if windows:
-                w = windows[0]
-                w.setAlphaValue_(opacity)
-                log(f"macOS 窗口透明度已设置: {opacity}")
-        except ImportError as e:
-            log(f"macOS 透明度设置失败: {e}")
-    return True
+    """运行时改窗口透明度。
+
+    设计选择：用 CSS 假透明度（背景 rgba），不调原生窗口 alpha。
+    原因：WS_EX_LAYERED + LWA_ALPHA 是整窗 alpha 混合，文字/进度条也
+    会一起淡化，但视觉上大块背景穿透感强、细线条不显透明，用户
+    反馈"只淡化背景"。CSS rgba 只动背景色，文字/进度条保持清晰。
+    实际透明度变化交给前端 CSS 变量（applyWindowOpacity）。
+
+    本函数只负责：把透明度持久化到 cfg，并（若 main 窗口存在）调一次
+    evaluate_js 通知前端应用。窗口层不做任何操作。
+    """
+    return True  # 实际效果在 api.core.Api.set_opacity 里通过 evaluate_js 触发
 
 
 # --------------------- 几何持久化 ---------------------
@@ -121,6 +139,76 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
     return {"ok": True, "width": width, "height": height}
 
 
+# --------------------- 移动窗口（不改大小） ---------------------
+
+def move_window(window, x: int, y: int) -> bool:
+    """只改窗口位置，不改大小。CSS 逻辑像素。"""
+    if window is None:
+        return False
+
+    system = platform.system()
+    if system == "Windows":
+        hwnd = screen_helper.window_hwnd(window)
+        if hwnd:
+            try:
+                scale = screen_helper.windows_dpi_scale(window)
+                user32 = ctypes.windll.user32
+                phys_x = int(x * scale)
+                phys_y = int(y * scale)
+                user32.SetWindowPos(
+                    wintypes.HWND(hwnd), None,
+                    phys_x, phys_y, 0, 0,
+                    0x0001 | 0x0004 | 0x0010,    # SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+                )
+                return True
+            except OSError as e:
+                log(f"Windows move_window 失败: {e}")
+                return False
+
+    try:
+        window.move(x, y)
+        return True
+    except (OSError, RuntimeError, AttributeError) as e:
+        log(f"move_window 失败: {e}")
+        return False
+
+
+def user_resize(window, x: int = -1, y: int = -1, width: int = -1, height: int = -1) -> dict:
+    """用户拖 8 方向 resize handle 时由前端调用，参数是 CSS 逻辑像素。
+
+    frameless 窗口没有 OS resize 边，前端 HTML 自绘 8 方向 handle 调这个。
+    x/y 为 -1 表示该方向不动（保持当前位置）—— 拖右/下/右上/右下 时只改 w/h，
+    拖左/上/左上/左下 时同时改 x/y + w/h。
+    Windows 必须走 Win32 SetWindowPos 处理 DPI；其他平台 window.resize 够用。
+    """
+    if window is None:
+        return {"ok": False}
+
+    if width < 0 or height < 0:
+        return {"ok": False, "error": "width/height required"}
+    # 限制最小尺寸
+    width = max(260, int(width))
+    height = max(80, min(1200, int(height)))
+    log(f"user_resize: x={x}, y={y}, w={width}, h={height}")
+
+    system = platform.system()
+    if system == "Windows" and _resize_windows(window, width, height, x, y):
+        return {"ok": True, "width": width, "height": height}
+
+    try:
+        window.resize(width, height)
+        cfg = getattr(window, "_token_view_cfg", None)
+        if cfg is not None:
+            cx = int(getattr(window, "x", 0) or 0)
+            cy = int(getattr(window, "y", 0) or 0)
+            cfg["geometry"] = [cx, cy, width, height]
+            config.save(cfg)
+        return {"ok": True, "width": width, "height": height}
+    except (OSError, RuntimeError) as e:
+        log(f"user_resize 失败: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def _resize_macos(window, width: int, height: int, keep_width: bool) -> bool:
     try:
         def work():
@@ -143,8 +231,12 @@ def _resize_macos(window, width: int, height: int, keep_width: bool) -> bool:
         return False
 
 
-def _resize_windows(window, width: int, height: int) -> bool:
-    """Win32 SetWindowPos 走物理像素，JS 传 CSS 逻辑像素。"""
+def _resize_windows(window, width: int, height: int,
+                    x: int = -1, y: int = -1) -> bool:
+    """Win32 SetWindowPos 走物理像素，JS 传 CSS 逻辑像素。
+
+    x/y = -1 表示保持当前位置。>=0 时物理像素换算后应用。
+    """
     try:
         user32 = ctypes.windll.user32
     except OSError:
@@ -156,6 +248,18 @@ def _resize_windows(window, width: int, height: int) -> bool:
     scale = screen_helper.windows_dpi_scale(window)
     phys_w = max(1, int(width * scale))
     phys_h = max(1, int(height * scale))
+
+    if x >= 0 and y >= 0:
+        phys_x = int(x * scale)
+        phys_y = int(y * scale)
+    else:
+        # 保持当前位置：从 GetWindowRect 读
+        rect = wintypes.RECT()
+        if user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            phys_x = int(rect.left)
+            phys_y = int(rect.top)
+        else:
+            phys_x, phys_y = 0, 0
 
     HWND_TOPMOST = -1
     SWP_NOACTIVATE = 0x0010
@@ -175,8 +279,8 @@ def _resize_windows(window, width: int, height: int) -> bool:
     ok = user32.SetWindowPos(
         wintypes.HWND(hwnd),
         wintypes.HWND(HWND_TOPMOST),
-        int(rect.left),
-        int(rect.top),
+        phys_x,
+        phys_y,
         phys_w,
         phys_h,
         SWP_NOACTIVATE,
@@ -194,10 +298,27 @@ def _resize_windows(window, width: int, height: int) -> bool:
 
 # --------------------- 移到屏幕顶部 ---------------------
 
+def _save_pre_dock_geometry(window, cfg: dict) -> None:
+    """进入 dock 前把当前窗口位置存到 cfg["pre_dock_geometry"]，退出时恢复。"""
+    if not cfg.get("pre_dock_geometry"):
+        try:
+            x = int(getattr(window, "x", 0) or 0)
+            y = int(getattr(window, "y", 0) or 0)
+            w = int(getattr(window, "width", 0) or 0)
+            h = int(getattr(window, "height", 0) or 0)
+            if w and h:
+                cfg["pre_dock_geometry"] = [x, y, w, h]
+                config.save(cfg)
+        except (OSError, AttributeError):
+            pass
+
+
 def move_to_top(window, cfg: dict, height: int = 0) -> dict:
     """把窗口放大并移到当前屏幕顶部。返回 {"ok", "width", "height", "mode"}。"""
     if window is None:
         return {"ok": False}
+
+    _save_pre_dock_geometry(window, cfg)
 
     system = platform.system()
     if system == "Darwin":
@@ -357,3 +478,92 @@ def _move_to_top_pywebview(window, cfg: dict, height: int) -> dict:
         config.save(cfg)
     log(f"窗口已放大并移动到顶部: x={x}, y={y}, w={w}, h={h}")
     return {"ok": True, "width": w, "height": h, "mode": "top"}
+
+
+def restore_from_dock(window, cfg: dict) -> dict:
+    """退出 auto-hide dock 时把窗口恢复到 pre_dock_geometry。"""
+    if window is None:
+        return {"ok": False, "error": "no window"}
+    pre = cfg.get("pre_dock_geometry")
+    if not pre or len(pre) != 4:
+        return {"ok": False, "error": "no pre_dock_geometry"}
+    x, y, w, h = [int(v) for v in pre]
+    if w < 260 or h < 80:
+        return {"ok": False, "error": "invalid pre geometry"}
+
+    system = platform.system()
+    if system == "Windows" and screen_helper.window_hwnd(window):
+        try:
+            ctypes.windll.user32.SetWindowPos(
+                wintypes.HWND(screen_helper.window_hwnd(window)),
+                wintypes.HWND(-1),  # HWND_TOPMOST（保持置顶）
+                x, y, w, h,
+                0x0010,             # SWP_NOACTIVATE
+            )
+        except OSError as e:
+            log(f"Windows restore_window SetWindowPos 失败: {e}")
+            return {"ok": False, "error": str(e)}
+    else:
+        try:
+            window.move(x, y)
+            window.resize(w, h)
+        except (OSError, RuntimeError) as e:
+            log(f"restore_window 失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    cfg["geometry"] = [x, y, w, h]
+    cfg.pop("pre_dock_geometry", None)
+    config.save(cfg)
+    log(f"窗口已从 dock 恢复: x={x}, y={y}, w={w}, h={h}")
+    return {"ok": True, "x": x, "y": y, "w": w, "h": h}
+
+
+# --------------------- auto-hide dock：物理位置滑入/滑出 ---------------------
+
+def set_dock_hidden(window, hidden: bool) -> dict:
+    """auto-hide dock 的物理位置切换：
+    hidden=True  → 窗口 y 移到 -height+4（露 4px 缝在屏幕顶部）
+    hidden=False → 窗口 y 回到 0（完整显示）
+
+    物理位置方案比 CSS transform 稳：WebView2 高 DPI 下 calc(-100% + 4px)
+    行为不一致，物理 SetWindowPos 精准控制。
+    4px 缝仍在 WebView 视口内（窗口仍占 y=-h+4 ~ 4），鼠标进 4px 缝
+    时 mouseenter/mousemove 仍能触发。
+    """
+    if window is None:
+        return {"ok": False, "error": "no window"}
+    hwnd = screen_helper.window_hwnd(window) if platform.system() == "Windows" else 0
+
+    if hwnd:
+        try:
+            # 取当前窗口位置
+            rect = wintypes.RECT()
+            if not ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+                return {"ok": False, "error": "GetWindowRect failed"}
+            cur_x = int(rect.left)
+            cur_y = int(rect.top)
+            w = int(rect.right - rect.left)
+            h = int(rect.bottom - rect.top)
+            new_y = (4 - h) if hidden else 0
+            ctypes.windll.user32.SetWindowPos(
+                wintypes.HWND(hwnd),
+                wintypes.HWND(-1),  # HWND_TOPMOST（保持置顶）
+                cur_x, new_y, w, h,
+                0x0010,             # SWP_NOACTIVATE
+            )
+            log(f"auto-hide dock: y={cur_y} -> {new_y} (hidden={hidden})")
+            return {"ok": True, "y": new_y, "hidden": hidden}
+        except OSError as e:
+            log(f"set_dock_hidden Win32 失败: {e}")
+            return {"ok": False, "error": str(e)}
+    else:
+        # macOS / Linux 兜底
+        try:
+            h = int(getattr(window, "height", 0) or 0)
+            x = int(getattr(window, "x", 0) or 0)
+            new_y = (4 - h) if hidden else 0
+            window.move(x, new_y)
+            return {"ok": True, "y": new_y, "hidden": hidden}
+        except (OSError, RuntimeError, AttributeError) as e:
+            log(f"set_dock_hidden 失败: {e}")
+            return {"ok": False, "error": str(e)}
