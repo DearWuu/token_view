@@ -5,71 +5,44 @@
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │  桌面进程（pywebview）                                          │
-│                                                                │
-│  ┌───────────────────────┐  ┌────────────────────────────┐    │
-│  │ web/index.html        │  │ web/settings.html          │    │
-│  │ + app.js + style.css  │  │ (独立 webview 窗口)        │    │
-│  │ 主悬浮窗 UI           │  │                            │    │
-│  └──────────┬────────────┘  └────────────┬───────────────┘    │
-│             │                            │                    │
-│             │ window.pywebview.api.xxx   │                    │
-│             ▼                            ▼                    │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │  api/core.py:Api   (js_api 桥)                          │ │
-│  │                                                          │ │
-│  │  get_usage / get_config / save_config                    │ │
-│  │  add_provider / remove_provider / update_provider       │ │
-│  │  launch_cdp_chrome                                       │ │
-│  │  toggle_on_top / set_opacity / set_geometry             │ │
-│  │  set_top_mode / set_compact / set_dock                   │ │
-│  │  set_refresh_interval                                    │ │
-│  │  resize_window_to_content / move_window_to_top          │ │
-│  │  open_settings_window / close_settings / quit_app        │ │
-│  │  collect_and_persist (新)                                │ │
-│  │  └─ 内部分发到下面子模块                                 │ │
-│  └──────┬──────────────┬──────────────┬─────────────┬──────┘ │
-│         │              │              │             │        │
-│   ┌─────▼─────┐  ┌─────▼─────┐  ┌─────▼─────┐  ┌────▼─────┐ │
-│   │ chrome.py │  │ screen.py │  │ window.py │  │providers │ │
-│   │ find/     │  │ 跨平台    │  │ move/     │  │  .py     │ │
-│   │ launch    │  │ 屏幕/DPI  │  │ resize/   │  │ (CRUD)   │ │
-│   │ CDP Chrome│  │ 几何      │  │ top/alpha │  │          │ │
-│   └─────┬─────┘  └───────────┘  └───────────┘  └──────────┘ │
-│         │                                                      │
-│   ┌─────▼─────┐  ┌────────────┐  ┌─────────────┐             │
-│   │ state.py  │  │ settings.py│  │ logger.py   │             │
-│   │ state.json│  │ 设置窗口   │  │ debug.log   │             │
-│   │ 原子写    │  │ + 模式     │  │             │             │
-│   └───────────┘  └────────────┘  └─────────────┘             │
-│                                                                │
+│                                                                  │
+│  ┌──────────────────────┐    ┌─────────────────────────────┐   │
+│  │  web/index.html      │    │  web/settings.html           │   │
+│  │  + app.js + css      │ ←→ │  (独立 webview 窗口)         │   │
+│  │  8 方向 resize       │    └─────────────────────────────┘   │
+│  │  auto-hide dock      │              │                       │
+│  │  假透明度            │              │  window.pywebview.api  │
+│  └──────────┬───────────┘              │                       │
+│             │                          │                       │
+│  ┌──────────▼─────────────────────────────────────────────────┐ │
+│  │  api/core.py:Api                                          │ │
+│  │   ├─ chrome.py  (find/launch CDP Chrome)                 │ │
+│  │   ├─ screen.py  (Win32 HWND / DPI / 屏幕工作区)          │ │
+│  │   ├─ window.py  (move/resize/置顶/auto-hide/几何)        │ │
+│  │   ├─ providers.py (CRUD)                                 │ │
+│  │   ├─ state.py  (state.json 协议，原子写)                 │ │
+│  │   └─ settings.py (设置窗口 + 模式/刷新间隔)             │ │
+│  └──────────┬─────────────────────────────────────────────────┘ │
+│             │                                                     │
+│  ┌──────────▼─────────────────────────────────────────────────┐ │
+│  │  providers/                                               │ │
+│  │   ├─ base.py + cdp.py (CDPHarness 三个 provider 共享)    │ │
+│  │   ├─ zhipu.py                                            │ │
+│  │   ├─ opencode.py                                         │ │
+│  │   └─ mimo.py                                             │ │
+│  └────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────┘
-                  │ 写 state.json                │
-                  ▼                               │
-       %APPDATA%/token_view/state.json            │
-                  │                               │
-                  │ 读（不需要 pywebview）         │
-                  ▼                               │
-       ┌─────────────────────────────────────┐    │
-       │  其他工具（companion）               │    │
-       │   ├ 菜单栏 / 状态栏 hook            │    │
-       │   ├ IDE 插件                        │    │
-       │   └ 手机端推送                      │    │
-       └─────────────────────────────────────┘    │
-                                                   │
-                  │ WebSocket CDP                  │
-                  ▼                                │
-       ┌─────────────────────────────────────┐     │
-       │  调试 Chrome（用户登录的）           │     │
-       │  9222 + --remote-allow-origins=*    │     │
-       │  user-data-dir=独立 profile         │     │
-       └─────────────────────────────────────┘     │
-                                                   │
-                  │ fetch (bigmodel.cn / opencode.ai)
-                  ▼                                │
-       ┌─────────────────────────────────────┐     │
-       │  服务端                              │     │
-       │  智谱 / OpenCode / 小米 MiMo         │     │
-       └─────────────────────────────────────┘     │
+                  │                              │
+                  │ 写 state.json                │  WebSocket CDP
+                  ▼                              ▼
+        %APPDATA%/token_view/         调试 Chrome
+        ├─ config.json                (--remote-debugging-port=9222
+        ├─ state.json                  --remote-allow-origins=*)
+        ├─ debug.log                   user-data-dir=独立 profile
+        └─ chrome_profile/                          │
+                                                     ▼
+                                          bigmodel.cn / opencode.ai
+                                          / platform.xiaomimimo.com
 ```
 
 ## 二、数据流
@@ -147,10 +120,29 @@ ZhipuProvider._parse_team(j["data"], data)
 return UsageData
 ```
 
+### D. auto-hide dock（顶部模式）
+
+```
+web/app.js:setupDockAutoHide()
+   ├─ document mouseenter → 取消 setTimeout，立即 setHidden(false)
+   ├─ document mouseleave → 200ms setTimeout → setHidden(true)
+   └─ document mousemove → 屏幕 y<4 → setHidden(false)
+
+api.set_dock_hidden(hidden)
+   ↓
+api/window.py: Win32 GetWindowRect → 算 new_y
+   ├─ hidden=True  → new_y = 4 - h    # 露 4px 缝
+   └─ hidden=False → new_y = 0        # 完整显示
+   ↓
+SetWindowPos(hwnd, HWND_TOPMOST, x, new_y, w, h, SWP_NOACTIVATE)
+```
+
+fitWindowOnce 完后再调一次 set_dock_hidden(true) —— 因为 resize 后真实 h 变了。
+
 ## 三、为什么选 pywebview
 
 调研过 4 个行业标杆项目（claude-monitor / Headroom / claude-statusbar / claude-monitor-cyd），
-**没有用 PySide6/Qt 的**。原因：
+**没有**用 PySide6/Qt 的。原因：
 
 | 痛点 | pywebview | Qt (PySide6) |
 |------|-----------|--------------|
@@ -158,7 +150,7 @@ return UsageData
 | 圆角 + 阴影 | CSS 一行 | 手写 `setStyleSheet` + 反复跨平台调 |
 | 实时刷新 | `setInterval` + `await api.xxx` | `QThread` + `QObject` + `Signal`（Widget 不能 moveToThread） |
 | 跨平台 DPI | 浏览器自己处理 | Win32 GetDpiForWindow + 物理/逻辑像素换算 |
-| 调试 | 浏览器 DevTools 实时改 | 改一行 QSS 重启进程 |
+| 调试 | 浏览器 DevTools 实时改 DOM | 改一行 QSS 重启进程 |
 | 动画 | CSS transition/keyframes | QPropertyAnimation 配曲线参数 |
 | 包大小 | pywebview 5MB+ | PySide6 100MB+ |
 
@@ -211,11 +203,42 @@ for p in data["providers"]:
     print(p["name"], p["status"], [(i["label"], i["percent"]) for i in p["items"]])
 ```
 
-## 五、新增 Provider 流程
+## 五、8 方向 resize 流程
 
-1. `providers/<name>.py` 写一个继承 `BaseProvider` 的类，实现 `fetch() -> UsageData`。
-2. 如果走 CDP，`providers.cdp.CDPHarness(port, page_keyword=...)` 复用 /json + Runtime.evaluate。
-3. `providers/__init__.py` 的 `build()` 加 `if ptype == "..."` 分支。
-4. `config.new_provider("...")` 加默认值。
-5. `web/settings.html` 加 provider-specific 表单（可选）。
-6. 测试：手动启动 CDP Chrome 登录 + `pytest tests/` 跑可测部分。
+```
+mousedown on .resize-edge-{n,s,e,w,ne,nw,sw} or .resize-grip
+   ↓
+startResize(e, dir)
+   ↓
+mousemove → onResizeMove
+   ↓
+   const dx = e.screenX - startX
+   const dy = e.screenY - startY
+   let newW = startW, newH = startH, newX = startWinX, newY = startWinY
+   if (dir.includes('e')) newW = startW + dx
+   if (dir.includes('s')) newH = startH + dy
+   if (dir.includes('w')) { newW = startW - dx; newX = startWinX + dx; }
+   if (dir.includes('n')) { newH = startH - dy; newY = startWinY + dy; }
+   ↓
+   api.resize_window_to_content(newW, newH)    # Win32 SetWindowPos 改 w/h
+   api.move_window(newX, newY)                 # 拖左/上边时改位置
+   ↓
+mouseup → onResizeEnd
+```
+
+CSS：
+```css
+.resize-handle { -webkit-app-region: no-drag; }   /* 跳出 body drag */
+.rh-n, .rh-s { left: 0; right: 0; height: 5px; }   /* 上/下边 5px */
+.rh-w, .rh-e { top: 0; bottom: 0; width: 5px; }   /* 左/右边 5px */
+.rh-nw, .rh-ne, .rh-sw, .rh-se { width: 12px; height: 12px; }  /* 角 12px */
+```
+
+## 六、新增 Provider 流程
+
+1. `providers/<name>.py` 写一个继承 `BaseProvider` 的类，实现 `fetch() -> UsageData`
+2. 走 CDP 的话用 `CDPHarness(port, page_keyword=...)` 复用 `/json` + `Runtime.evaluate`
+3. `providers/__init__.py` 的 `build()` 加 `if ptype == "..."` 分支
+4. `config.new_provider("...")` 加默认值
+5. 测试：手动启动 CDP Chrome 登录 + `pytest tests/` 跑可测部分
+6. 打包：`pyinstaller TokenView.spec --clean --noconfirm`（web 资源自动包含）

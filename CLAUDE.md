@@ -12,16 +12,21 @@ Python 桥），支持**智谱 GLM Coding Plan（含团队版）**、**OpenCode 
 ## 运行
 
 ```
+# 源码运行
 python -X utf8 main.py
+
+# 打包（输出 dist/TokenView.exe，~22MB）
+pyinstaller TokenView.spec --clean --noconfirm
 ```
-Windows 控制台必须用 `-X utf8` 处理中文。依赖 pywebview + requests + websocket-client，
-本机已装。
+
+Windows 控制台必须用 `-X utf8` 处理中文。依赖 pywebview + requests + websocket-client + pillow
+（详见 requirements.txt）。
 
 ## 架构（big picture）
 
 **渲染层**：pywebview 把 `web/index.html` 跑在 WebView2（Windows）/WKWebView（macOS）/
-WebKitGTK（Linux）里。CSS 处理圆角/阴影/暗色/DPI，JS 调 `window.pywebview.api.xxx`
-拿数据。
+WebKitGTK（Linux）里。CSS 处理圆角/阴影/暗色/DPI/8 方向 resize，JS 调
+`window.pywebview.api.xxx` 拿数据。
 
 **桥层**：`api/core.py:Api` 注入到 `webview.create_window(js_api=...)`。Api 是无下划线
 公开方法的薄门面，内部把职责分到 `api/{chrome, screen, window, providers, state, settings}`。
@@ -37,10 +42,11 @@ WebKitGTK（Linux）里。CSS 处理圆角/阴影/暗色/DPI，JS 调 `window.py
 - `OpenCodeProvider`：无官方 API，CDP 抓 workspace 页面 fetch + DOM 兜底。
 - `MimoProvider`：CDP 调 `/api/v1/tokenPlan/usage`。
 
-**配置 / 日志**：
-- 配置 `%APPDATA%/token_view/config.json`（pathlib + 原子写）
-- 日志 `%APPDATA%/token_view/debug.log`（`logger.py`，调试 GUI 异步流程必看）
-- 状态文件 `%APPDATA%/token_view/state.json`（Headroom 风格，schema=1，给 companion 工具消费）
+**配置 / 日志 / 状态**（均在 `%APPDATA%/token_view/`）：
+- `config.json`：pathlib + 原子写
+- `debug.log`：`logger.py`，调试 GUI 异步流程必看
+- `state.json`：Headroom 风格，schema=1，给 companion 工具（菜单栏/状态栏 hook 等）消费
+- `chrome_profile/`：CDP Chrome 独立 user-data-dir
 
 ## 关键坑（非显而易见，踩过）
 
@@ -74,6 +80,23 @@ WebKitGTK（Linux）里。CSS 处理圆角/阴影/暗色/DPI，JS 调 `window.py
 - **pywebview WinForms 序列化**：Windows 上 pywebview 的 `get_functions` 会递归遍历
   `api.window.native`（.NET WinForms Form），导致 COM 无限递归崩溃。`main.py`
   标记 `window._serializable = False` 避开。
+- **WebView2 透明窗口裁切**（高 DPI 125%/150%）：WinForms WebView2 + Frameless + Transparent
+  + 高 DPI 已知会让窗口边缘被裁切。规避：Windows 不开 `transparent=True`，CSS 用
+  `body.no-transparent` 给不透明背景。
+- **WS_EX_LAYERED 整窗 alpha 副作用**：用 `Form.Opacity` 整窗 alpha 混合时，文字/进度条
+  也一起淡化，但视觉上大块背景"穿透感"强、细线条不显透明，用户反馈"只淡背景"。
+  改为**假透明度**（CSS `rgba(--opacity-primary)`），仅背景半透，文字清晰。
+- **WebView2 改 y 后重派 mouseenter/mouseleave**：`set_dock_hidden` 调 Win32
+  SetWindowPos 改窗口 y，WebView2 会重派 mouseenter/mouseleave，导致 dock auto-hide
+  死循环（`auto-hide dock: y=0 ↔ -NNN` 反复）。修法：mouseleave 走 200ms 延迟，
+  `set_dock_hidden` 去重 + 配 `e.screenY < 4`（不用 `e.clientY`，WebView 内部坐标会乱）。
+- **fit 完 dock hidden y 算错**：`moveToTop` 立即触发 set_dock_hidden 用的是 `move_to_top`
+  时的临时高度 h，之后 `resize_window_to_content` 把窗口 fit 到真实高度，y 仍按
+  旧 h 算 → 窗口完全在屏幕外。修法：`fitWindowOnce` 完重设 `set_dock_hidden(true)`，
+  后端 `GetWindowRect` 拿新 h 重算 `new_y = 4 - h`。
+- **mouseenter/mouseleave 监听 `document` 不在 `container`**：因为 WebView 重派时基于
+  整个 WebView 视口边界而非单个 DOM 元素。但 mouseleave 走 200ms 延迟后，
+  后续 WebView 重派立即反转被定时器压制。
 
 ## 状态文件协议（Headroom 风格）
 
@@ -87,9 +110,35 @@ WebKitGTK（Linux）里。CSS 处理圆角/阴影/暗色/DPI，JS 调 `window.py
 前端通过 `Api.collect_and_persist()` 触发一次 fetch + 落盘；其他 consumer
 直接 `import json; json.load(open(state_file_path()))` 即可。
 
+## 8 方向 resize
+
+`web/index.html` 4 边 + 3 角 nw/ne/sw + 1 grip（id="resize-grip"）= 8 个 handle。
+实现 `web/app.js:startResize` + `onResizeMove` + `onResizeEnd`，调两个 API：
+- `api.resize_window_to_content(w, h)`：改大小
+- `api.move_window(x, y)`：拖左/上边时改位置
+
+`web/style.css` 中 `.resize-edge` / `.resize-grip` 都设 `-webkit-app-region: no-drag`
+跳出 body 的 drag region。`body.dock-mode` 时全部 `display: none`（窗口被屏幕顶部挡着时不让 resize）。
+
+新增 handle 步骤：
+1. `web/index.html` 加 `<div class="resize-edge resize-edge-XXX" id="resize-XXX"></div>`
+2. `web/style.css` 加定位 + cursor
+3. `web/app.js:startResize` `onResizeMove` 算 x/y/w/h 时考虑新方向
+
 ## 新增 Provider
 
 1. 在 `providers/` 下加 `<name>.py`，继承 `BaseProvider`，实现 `fetch() -> UsageData`
 2. 走 CDP 的话用 `CDPHarness(port, page_keyword=...)` 复用 `/json` + `Runtime.evaluate`
 3. `providers/__init__.py` 的 `build()` 加 `if ptype == "..."` 分支
 4. `config.new_provider("...")` 加默认值
+
+## 打包（PyInstaller）
+
+`TokenView.spec` 配置：
+- `console=False` 窗口模式
+- `datas=[('web', 'web')]` 打包 web 资源
+- `hiddenimports` 显式列 `webview.platforms.winforms` 等动态 import
+- `excludes` 排除 numpy/PySide6 等大依赖
+
+产物：`dist/TokenView.exe`（~22MB，onedir 可拆分）。WebView2 Runtime 用户机器
+需预装（Win11 自带，Win10 一般预装）。
