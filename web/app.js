@@ -16,6 +16,7 @@ const state = {
 const PANEL_WIDTH = 420;
 const COMPACT_PANEL_WIDTH = 340;
 const WINDOW_HEIGHT_PADDING = 24;
+const MAX_WIDTH_SCALE = 2.5;
 
 // 颜色配置
 const BADGE_COLORS = {
@@ -37,10 +38,10 @@ function formatReset(note) {
 
 function desiredPanelWidth() {
     if (state.topMode) {
-        // topMode 下用视口 CSS 像素宽度，避免把 Python 端返回的逻辑像素
-        //（含 DPI 缩放）当成 CSS 像素，导致 container 宽度超出视口右边被裁。
-        // 同时加 1400 上限，避免全屏铺满太宽（4K 下 2500+ 太长）。
-        return Math.max(Math.min(window.innerWidth, 2500), PANEL_WIDTH);
+        if (state.topWidth) {
+            return state.topWidth;
+        }
+        return Math.max(window.innerWidth || PANEL_WIDTH, PANEL_WIDTH);
     }
     return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
 }
@@ -49,11 +50,23 @@ function applyPanelWidth() {
     document.documentElement.style.setProperty('--panel-width', `${desiredPanelWidth()}px`);
 }
 
+function nativeWidthForCss(cssWidth) {
+    if (state.topMode) {
+        return 0;
+    }
+    const viewportWidth = window.innerWidth || cssWidth;
+    if (viewportWidth > 0 && viewportWidth < cssWidth - 2) {
+        const neededScale = Math.min(MAX_WIDTH_SCALE, cssWidth / viewportWidth);
+        state.widthScale = Math.max(state.widthScale || 1, neededScale);
+    }
+    return Math.ceil(cssWidth * (state.widthScale || 1));
+}
+
 function measurePanelSize() {
     applyPanelWidth();
     const container = document.querySelector('.container');
     const cards = elements.container;
-    const width = desiredPanelWidth();
+    const cssWidth = desiredPanelWidth();
     const titleHeight = Math.ceil(elements.titlebar.getBoundingClientRect().height);
 
     // 临时解除 cards-container 的高度约束和滚动，让 scrollHeight 只反映
@@ -75,7 +88,7 @@ function measurePanelSize() {
     const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
     const height = Math.ceil(summedHeight + WINDOW_HEIGHT_PADDING);
     return {
-        width,
+        width: nativeWidthForCss(cssWidth),
         height: Math.max(80, height)
     };
 }
@@ -228,6 +241,7 @@ async function toggleCompact() {
     state.compact = !state.compact;
     state.topMode = false;
     state.topWidth = null;
+    state.widthScale = 1;
     document.body.classList.toggle('compact', state.compact);
     document.body.classList.remove('top-mode');
     applyPanelWidth();
@@ -244,6 +258,8 @@ async function toggleCompact() {
 async function moveToTop() {
     if (window.pywebview && window.pywebview.api) {
         state.topMode = true;
+        state.topWidth = null;
+        state.widthScale = 1;
         applyPanelWidth();
         document.body.classList.add('top-mode');
         const size = measurePanelSize();
@@ -252,8 +268,18 @@ async function moveToTop() {
         elements.btnTop.classList.toggle('active', ok);
         setTimeout(() => elements.btnTop.classList.remove('active'), 700);
         if (ok) {
+            if (typeof result === 'object' && result.width) {
+                state.topWidth = result.width;
+                applyPanelWidth();
+            }
             // 延迟等 WebView2 完成重布局
             scheduleWindowFit(220);
+        } else {
+            state.topMode = false;
+            state.topWidth = null;
+            document.body.classList.remove('top-mode');
+            applyPanelWidth();
+            scheduleWindowFit(80);
         }
     }
 }

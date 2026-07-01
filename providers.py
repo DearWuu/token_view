@@ -176,11 +176,12 @@ class ZhipuProvider(BaseProvider):
         now = datetime.now()
         st = (now - timedelta(days=6)).strftime("%Y-%m-%d") + " 00:00:00"
         et = now.strftime("%Y-%m-%d") + " 23:59:59"
+        cache_bust = int(time.time() * 1000)
         js = (
             "(async()=>{"
             "var m=/bigmodel_token_production=([^;]+)/.exec(document.cookie);"
             "var tok=m?m[1]:'';"
-            "var h={'Accept':'application/json'};"
+            "var h={'Accept':'application/json','Cache-Control':'no-cache','Pragma':'no-cache'};"
             "if(tok)h['Authorization']=tok;"
             "var org=localStorage.getItem('Bigmodel-Organization');"
             "var proj=localStorage.getItem('Bigmodel-Project');"
@@ -188,8 +189,8 @@ class ZhipuProvider(BaseProvider):
             "if(proj)h['Bigmodel-Project']=proj;"
             "const r=await fetch("
             f"'/api/monitor/usage/sub-account-rank?startTime={st}&endTime={et}"
-            "&pageNum=1&pageSize=20&keyword='"
-            ",{credentials:'include',headers:h});"
+            f"&pageNum=1&pageSize=20&keyword=&_={cache_bust}'"
+            ",{credentials:'include',headers:h,cache:'no-store'});"
             "return await r.text();})()"
         )
 
@@ -252,6 +253,9 @@ class ZhipuProvider(BaseProvider):
 
     def _get(self, url, headers, data, params, parse):
         try:
+            headers = dict(headers or {})
+            headers.setdefault("Cache-Control", "no-cache")
+            headers.setdefault("Pragma", "no-cache")
             r = requests.get(url, headers=headers, params=params, timeout=15)
         except requests.RequestException as e:
             data.status, data.error = "error", f"网络错误: {e}"
@@ -405,32 +409,43 @@ class OpenCodeProvider(BaseProvider):
             data.status, data.error = "error", "CDP target 缺少 webSocketDebuggerUrl"
             return data
 
-        # 直接从页面 DOM 读取已显示的用量数据
-        js = """
-        (() => {
-            // 查找页面上显示的百分比数字
-            const texts = document.body.innerText;
-            const results = {};
-            
-            // 匹配 5h/rolling 用量
-            const rollingMatch = texts.match(/5[Hh].*?(\\d+(?:\\.\\d+)?)\\s*%/);
-            if (rollingMatch) results.rolling = parseFloat(rollingMatch[1]);
-            
-            // 匹配 weekly 用量
-            const weeklyMatch = texts.match(/[Ww]eekly.*?(\\d+(?:\\.\\d+)?)\\s*%|周.*?(\\d+(?:\\.\\d+)?)\\s*%/);
-            if (weeklyMatch) results.weekly = parseFloat(weeklyMatch[1] || weeklyMatch[2]);
-            
-            // 匹配 monthly 用量
-            const monthlyMatch = texts.match(/[Mm]onthly.*?(\\d+(?:\\.\\d+)?)\\s*%|月.*?(\\d+(?:\\.\\d+)?)\\s*%/);
-            if (monthlyMatch) results.monthly = parseFloat(monthlyMatch[1] || monthlyMatch[2]);
-            
-            // 匹配所有百分比（通用）
-            const allPcts = [...texts.matchAll(/(\\d+(?:\\.\\d)?)\\s*%/g)].map(m => parseFloat(m[1]));
-            results.allPcts = allPcts;
-            
-            return JSON.stringify(results);
-        })()
-        """
+        # 优先主动重新 fetch 页面里出现过的同源接口；拿不到再回退读 DOM。
+        js = (
+            "(async()=>{"
+            "const out={source:'none',url:'',status:0,body:'',dom:null,errors:[]};"
+            "const hasUsage=t=>/rollingUsage|weeklyUsage|monthlyUsage|usagePercent/i.test(t||'');"
+            "const sameOrigin=u=>{try{return new URL(u,location.href).origin===location.origin}catch(e){return false}};"
+            "const addTs=u=>{const x=new URL(u,location.href);x.searchParams.set('_tv',Date.now());return x.href};"
+            "const readDom=()=>{"
+            "const texts=document.body.innerText||'';"
+            "const results={};"
+            "const rollingMatch=texts.match(/5[Hh].*?(\\d+(?:\\.\\d+)?)\\s*%/);"
+            "if(rollingMatch)results.rolling=parseFloat(rollingMatch[1]);"
+            "const weeklyMatch=texts.match(/[Ww]eekly.*?(\\d+(?:\\.\\d+)?)\\s*%|周.*?(\\d+(?:\\.\\d+)?)\\s*%/);"
+            "if(weeklyMatch)results.weekly=parseFloat(weeklyMatch[1]||weeklyMatch[2]);"
+            "const monthlyMatch=texts.match(/[Mm]onthly.*?(\\d+(?:\\.\\d+)?)\\s*%|月.*?(\\d+(?:\\.\\d+)?)\\s*%/);"
+            "if(monthlyMatch)results.monthly=parseFloat(monthlyMatch[1]||monthlyMatch[2]);"
+            "results.allPcts=[...texts.matchAll(/(\\d+(?:\\.\\d)?)\\s*%/g)].map(m=>parseFloat(m[1]));"
+            "return results;"
+            "};"
+            "let urls=[];"
+            "try{urls=performance.getEntriesByType('resource').map(e=>e.name)"
+            ".filter(sameOrigin).filter(u=>/(usage|__server|workspace|api|go|trpc|rpc)/i.test(u));}catch(e){}"
+            f"urls.unshift(new URL('/workspace/'+{json.dumps(wsid)}+'/go',location.origin).href);"
+            "urls.unshift(location.href);"
+            "urls=[...new Set(urls)];"
+            "for(const u of urls){"
+            "try{"
+            "const r=await fetch(addTs(u),{credentials:'include',cache:'no-store',"
+            "headers:{'Accept':'application/json, text/plain, */*','Cache-Control':'no-cache','Pragma':'no-cache'}});"
+            "const t=await r.text();"
+            "if(hasUsage(t)){out.source='network';out.url=u;out.status=r.status;out.body=t.slice(0,200000);out.dom=readDom();return JSON.stringify(out);}"
+            "out.errors.push({url:u,status:r.status,len:t.length});"
+            "}catch(e){out.errors.push({url:u,error:String(e).slice(0,120)});}"
+            "}"
+            "out.source='dom';out.dom=readDom();return JSON.stringify(out);"
+            "})()"
+        )
 
         try:
             ws = ws_connect(
@@ -479,6 +494,26 @@ class OpenCodeProvider(BaseProvider):
         if j.get("error") == "timeout":
             data.status = "error"
             data.error = "获取超时，请确保 opencode.ai 页面已加载完成"
+            return data
+
+        if j.get("source") == "network":
+            body = j.get("body") or ""
+            if self._parse_usage_text(body, data):
+                log(f"OpenCode 网络刷新: url={j.get('url')}, items={[(i.label, i.used_percent) for i in data.items]}")
+                return data
+            log(f"OpenCode 网络响应未解析: url={j.get('url')}, body={body[:500]}")
+            if isinstance(j.get("dom"), dict):
+                j = j["dom"]
+            else:
+                data.status = "empty"
+                data.error = "已主动请求 OpenCode，但响应里未解析到用量字段"
+                return data
+
+        if j.get("source") == "dom" and isinstance(j.get("dom"), dict):
+            j = j["dom"]
+
+        if self._append_usage_from_obj(j, data):
+            log(f"OpenCode JSON 解析: items={[(i.label, i.used_percent) for i in data.items]}")
             return data
 
         # 处理 DOM 解析结果
@@ -530,6 +565,62 @@ class OpenCodeProvider(BaseProvider):
 
         log(f"OpenCode 解析: status={data.status}, items={[(i.label, i.used_percent) for i in data.items]}")
         return data
+
+    def _parse_usage_text(self, text: str, data: UsageData) -> bool:
+        """解析主动 fetch 返回的 JSON/HTML/序列化文本里的 OpenCode 用量字段。"""
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            obj = None
+        if self._append_usage_from_obj(obj, data):
+            return True
+
+        found = False
+        for key, label in [
+            ("rollingUsage", "5h Rolling"),
+            ("weeklyUsage", "每周"),
+            ("monthlyUsage", "每月"),
+        ]:
+            patterns = [
+                rf'"{key}"\s*:\s*\{{[^{{}}]*?"usagePercent"\s*:\s*([0-9.]+)',
+                rf'\\"{key}\\"\s*:\s*\{{[^{{}}]*?\\"usagePercent\\"\s*:\s*([0-9.]+)',
+            ]
+            for pat in patterns:
+                m = re.search(pat, text)
+                if m:
+                    data.items.append(UsageItem(label, float(m.group(1))))
+                    found = True
+                    break
+        return found
+
+    def _append_usage_from_obj(self, obj, data: UsageData) -> bool:
+        """递归查找 rollingUsage/weeklyUsage/monthlyUsage 结构。"""
+        if obj is None:
+            return False
+        labels = {
+            "rollingUsage": "5h Rolling",
+            "weeklyUsage": "每周",
+            "monthlyUsage": "每月",
+        }
+        found = False
+        if isinstance(obj, dict):
+            for key, label in labels.items():
+                usage = obj.get(key)
+                if isinstance(usage, dict) and usage.get("usagePercent") is not None:
+                    data.items.append(UsageItem(label, float(usage.get("usagePercent"))))
+                    found = True
+            if found:
+                return True
+            for value in obj.values():
+                if self._append_usage_from_obj(value, data):
+                    return True
+        elif isinstance(obj, list):
+            for value in obj:
+                if self._append_usage_from_obj(value, data):
+                    return True
+        elif isinstance(obj, str) and "usagePercent" in obj:
+            return self._parse_usage_text(obj, data)
+        return found
         if nums:
             # 尝试从上下文找百分比文字
             m = re.search(r"(\d+(?:\.\d+)?)\s*%", ctx)
@@ -720,7 +811,13 @@ class MimoProvider(BaseProvider):
 
         js = (
             "(async()=>{"
-            "const r=await fetch(" + json.dumps(self.API_PATH) + ",{credentials:'include'});"
+            "const u=new URL(" + json.dumps(self.API_PATH) + ",location.origin);"
+            "u.searchParams.set('_tv',Date.now());"
+            "const r=await fetch(u.href,{"
+            "credentials:'include',"
+            "headers:{'Cache-Control':'no-cache','Pragma':'no-cache'},"
+            "cache:'no-store'"
+            "});"
             "return await r.text();})()"
         )
 

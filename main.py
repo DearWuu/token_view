@@ -81,7 +81,9 @@ def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     html_path = os.path.join(current_dir, 'web', 'index.html')
     
-    # 创建窗口 - 默认小面板，无边框，透明
+    is_windows = platform.system() == 'Windows'
+
+    # 创建窗口 - 默认小面板，无边框；Windows 下透明窗口在高 DPI 上容易裁切
     window = webview.create_window(
         'Token 用量监控',
         html_path,
@@ -91,10 +93,10 @@ def main():
         min_size=(260, 80),
         on_top=True,  # 屏幕级别置顶
         resizable=True,
-        x=520,
-        y=220,
+        x=100,
+        y=100,
         frameless=True,  # 无边框
-        transparent=True  # 透明背景
+        transparent=not is_windows
     )
     
     # 保存窗口引用到 API
@@ -102,7 +104,7 @@ def main():
     
     # Windows 上 pywebview 的 get_functions 会递归遍历 api.window.native
     #（.NET WinForms Form），导致 COM 无限递归崩溃。标记不可遍历以避开。
-    if platform.system() == 'Windows':
+    if is_windows:
         window._serializable = False
     
     # 窗口关闭回调

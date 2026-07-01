@@ -290,16 +290,24 @@ class Api:
             if not self.window:
                 return {"ok": False}
 
-            width = max(260, int(width))
+            width = int(width or 0)
+            keep_width = width <= 0
+            if not keep_width:
+                width = max(260, width)
             height = max(80, min(1200, int(height)))
 
             import platform
-            if platform.system() == "Darwin" and self._resize_window_macos(width, height):
+            if platform.system() == "Darwin" and self._resize_window_macos(width, height, keep_width):
                 return True
 
-            self.window.resize(width, height)
             x = int(getattr(self.window, "x", 0) or 0)
             y = int(getattr(self.window, "y", 0) or 0)
+            if keep_width:
+                width = self._current_window_width()
+            else:
+                self.window.resize(width, height)
+            if keep_width:
+                self.window.resize(width, height)
             self.cfg["geometry"] = [x, y, width, height]
             config.save(self.cfg)
             log(f"窗口已按内容缩放: w={width}, h={height}")
@@ -317,24 +325,31 @@ class Api:
             import platform
             import webview
 
-            if platform.system() == "Darwin":
-                mac_result = self._move_window_to_top_macos(width, height)
-                if mac_result:
-                    return mac_result
+            system = platform.system()
+            if system == "Darwin":
+                return self._move_window_to_top_macos(width, height)
+            if system == "Windows":
+                win_result = self._move_window_to_top_windows(height)
+                if win_result.get("ok"):
+                    return win_result
 
             x = int(getattr(self.window, "x", 0) or 0)
             y = int(getattr(self.window, "y", 0) or 0)
             w = int(getattr(self.window, "width", 0) or 0)
             h = max(80, int(height or getattr(self.window, "height", 0) or 0))
-            screens = webview.screens
+            screens = self._get_webview_screens(webview)
             screen = None
 
             if screens and w and h:
                 cx = x + w // 2
                 cy = y + h // 2
                 for item in screens:
-                    in_x = item.x <= cx < item.x + item.width
-                    in_y = item.y <= cy < item.y + item.height
+                    sx = self._screen_value(item, "x")
+                    sy = self._screen_value(item, "y")
+                    sw = self._screen_value(item, "width")
+                    sh = self._screen_value(item, "height")
+                    in_x = sx <= cx < sx + sw
+                    in_y = sy <= cy < sy + sh
                     if in_x and in_y:
                         screen = item
                         break
@@ -342,12 +357,7 @@ class Api:
                     screen = screens[0]
 
             if screen is not None:
-                margin = min(40, max(0, screen.width // 30))
-                top_margin = 36
-                w = max(320, screen.width - margin * 2)
-                h = min(h, max(80, screen.height - top_margin))
-                x = screen.x + margin
-                y = screen.y + top_margin
+                x, y, w, h = self._top_bar_geometry(screen, h)
             else:
                 w = max(1200, int(width or w))
                 x = 40
@@ -364,69 +374,238 @@ class Api:
             log(f"移动窗口到顶部失败: {e}")
             return {"ok": False}
 
-    def _resize_window_macos(self, width: int, height: int) -> bool:
-        """macOS 窗口缩放 - 使用 pywebview 标准方法。"""
+    def _resize_window_macos(self, width: int, height: int, keep_width: bool = False) -> bool:
+        """macOS 窗口缩放，所有 NSWindow 几何操作都切到主线程。"""
         try:
-            # 直接使用 pywebview 的 resize 方法，避免线程问题
-            self.window.resize(width, height)
-            x = int(getattr(self.window, "x", 0) or 0)
-            y = int(getattr(self.window, "y", 0) or 0)
-            self.cfg["geometry"] = [x, y, width, height]
-            config.save(self.cfg)
-            log(f"macOS 窗口已按内容缩放: w={width}, h={height}")
+            def work():
+                native = getattr(self.window, "native", None)
+                target_w = width
+                if keep_width:
+                    target_w = self._current_window_width()
+
+                if native is not None:
+                    frame = native.frame()
+                    frame.size.width = target_w
+                    frame.size.height = height
+                    native.setFrame_display_(frame, True)
+                else:
+                    self.window.resize(target_w, height)
+
+                x = int(getattr(self.window, "x", 0) or 0)
+                y = int(getattr(self.window, "y", 0) or 0)
+                self.cfg["geometry"] = [x, y, target_w, height]
+                config.save(self.cfg)
+                return target_w
+
+            target_w = self._run_on_macos_main_thread(work)
+            log(f"macOS 窗口已按内容缩放: w={target_w}, h={height}")
             return True
         except Exception as e:
             log(f"macOS 按内容缩放窗口失败: {e}")
             return False
 
+    def _run_on_macos_main_thread(self, func, timeout: float = 3.0):
+        """在 macOS 主线程同步执行窗口几何操作。"""
+        from Foundation import NSThread
+
+        if NSThread.isMainThread():
+            return func()
+
+        done = threading.Event()
+        box = {}
+
+        def wrapper():
+            try:
+                box["value"] = func()
+            except Exception as e:
+                box["error"] = e
+            finally:
+                done.set()
+
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(wrapper)
+        if not done.wait(timeout):
+            raise TimeoutError("等待 macOS 主线程执行窗口操作超时")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
+
+    def _get_webview_screens(self, webview_module):
+        """兼容不同 pywebview 版本的屏幕列表接口。"""
+        screens = getattr(webview_module, "screens", [])
+        if callable(screens):
+            return screens()
+        return screens or []
+
+    def _current_window_width(self, default: int = 260) -> int:
+        """读取窗口真实宽度，macOS 原生 frame 优先。"""
+        try:
+            native = getattr(self.window, "native", None)
+            if native is not None:
+                frame = native.frame()
+                width = int(frame.size.width or 0)
+                if width > 0:
+                    return max(default, width)
+        except Exception:
+            pass
+        return max(default, int(getattr(self.window, "width", 0) or 0))
+
+    def _screen_value(self, screen, key: str, default: int = 0) -> int:
+        """兼容 pywebview Screen 对象和 dict 两种形态。"""
+        if isinstance(screen, dict):
+            value = screen.get(key, default)
+        else:
+            value = getattr(screen, key, default)
+        return int(value or default)
+
+    def _top_bar_geometry(self, screen, height: int):
+        """计算顶部条位置：当前屏幕居中，长度约为屏幕的 80%。"""
+        sx = self._screen_value(screen, "x")
+        sy = self._screen_value(screen, "y")
+        sw = max(320, self._screen_value(screen, "width", 1200))
+        sh = max(120, self._screen_value(screen, "height", 800))
+        top_margin = 36
+        target_w = max(320, int(sw * 0.8))
+        target_h = max(80, min(int(height or 0), max(80, sh - top_margin)))
+        target_x = sx + max(0, (sw - target_w) // 2)
+        target_y = sy + top_margin
+        return target_x, target_y, target_w, target_h
+
     def _move_window_to_top_macos(self, width: int = 0, height: int = 0):
         """macOS 路径：移动窗口到屏幕顶部。"""
         try:
-            import webview
-            
-            # 使用 pywebview 的 screens 获取屏幕信息
-            screens = webview.screens
-            if not screens:
-                return False
-            
-            # 获取当前窗口位置
-            x = int(getattr(self.window, "x", 0) or 0)
-            y = int(getattr(self.window, "y", 0) or 0)
-            w = int(getattr(self.window, "width", 0) or 0)
-            h = max(80, int(height or getattr(self.window, "height", 0) or 0))
-            
-            # 找到当前窗口所在的屏幕
-            screen = None
-            cx = x + w // 2
-            cy = y + h // 2
-            for item in screens:
-                in_x = item.x <= cx < item.x + item.width
-                in_y = item.y <= cy < item.y + item.height
-                if in_x and in_y:
-                    screen = item
-                    break
-            if screen is None:
-                screen = screens[0]
-            
-            # 计算新位置和大小
-            margin = min(40, max(0, screen.width // 30))
-            top_margin = 36
-            w = max(320, screen.width - margin * 2)
-            h = min(h, max(80, screen.height - top_margin))
-            x = screen.x + margin
-            y = screen.y + top_margin
-            
-            # 使用 pywebview 的 move 和 resize 方法
-            self.window.resize(w, h)
-            self.window.move(x, y)
-            
-            self.cfg["geometry"] = [x, y, w, h]
-            config.save(self.cfg)
-            log(f"macOS 窗口已放大并移动到顶部: x={x}, y={y}, w={w}, h={h}")
-            return {"ok": True, "width": w, "height": h}
+            return self._run_on_macos_main_thread(
+                lambda: self._move_window_to_top_macos_native(height)
+            )
         except Exception as e:
             log(f"macOS 移动窗口到顶部失败: {e}")
-            return False
+            return {"ok": False, "error": str(e)}
+
+    def _move_window_to_top_macos_native(self, height: int = 0):
+        """macOS 原生移动窗口，避开 pywebview move/resize 偶发不生效。"""
+        try:
+            native = getattr(self.window, "native", None)
+            if native is None:
+                return {"ok": False, "error": "未找到 macOS 原生窗口"}
+
+            screen = native.screen()
+            if screen is None:
+                from Cocoa import NSScreen
+                screen = NSScreen.mainScreen()
+            if screen is None:
+                return {"ok": False, "error": "未找到 macOS 屏幕"}
+
+            visible = screen.visibleFrame()
+            sw = max(320, int(visible.size.width))
+            sh = max(120, int(visible.size.height))
+            top_margin = 36
+            target_w = max(320, int(sw * 0.8))
+            frame = native.frame()
+            current_h = int(frame.size.height or getattr(self.window, "height", 0) or 0)
+            target_h = max(80, min(int(height or current_h), max(80, sh - top_margin)))
+            target_x = int(visible.origin.x + (sw - target_w) / 2)
+            target_y = int(visible.origin.y + sh - target_h - top_margin)
+
+            frame.origin.x = target_x
+            frame.origin.y = target_y
+            frame.size.width = target_w
+            frame.size.height = target_h
+            native.setFrame_display_(frame, True)
+            native.orderFrontRegardless()
+
+            pywebview_y = int(visible.origin.y + top_margin)
+            self.cfg["geometry"] = [target_x, pywebview_y, target_w, target_h]
+            config.save(self.cfg)
+            log(f"macOS 原生窗口已移动到顶部: x={target_x}, y={pywebview_y}, w={target_w}, h={target_h}")
+            return {"ok": True, "width": target_w, "height": target_h}
+        except Exception as e:
+            log(f"macOS 原生移动窗口到顶部失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def _window_hwnd_windows(self) -> int:
+        """读取 Windows 原生窗口句柄。"""
+        native = getattr(self.window, "native", None)
+        for name in ("Handle", "handle", "hwnd"):
+            value = getattr(native, name, None) if native is not None else None
+            if value is None:
+                value = getattr(self.window, name, None)
+            if value is None:
+                continue
+            try:
+                if hasattr(value, "ToInt64"):
+                    return int(value.ToInt64())
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    def _move_window_to_top_windows(self, height: int = 0) -> Dict[str, Any]:
+        """Windows 路径：用 Win32 工作区计算当前屏幕顶部条。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = self._window_hwnd_windows()
+            if not hwnd:
+                return {"ok": False}
+
+            user32 = ctypes.windll.user32
+            MONITOR_DEFAULTTONEAREST = 2
+            SWP_NOACTIVATE = 0x0010
+            HWND_TOPMOST = -1
+
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                ]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", RECT),
+                    ("rcWork", RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            monitor = user32.MonitorFromWindow(wintypes.HWND(hwnd), MONITOR_DEFAULTTONEAREST)
+            if not monitor:
+                return {"ok": False}
+
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+            if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return {"ok": False}
+
+            work = info.rcWork
+            sw = max(320, int(work.right - work.left))
+            sh = max(120, int(work.bottom - work.top))
+            target_w = max(320, int(sw * 0.8))
+            target_h = max(80, min(int(height or getattr(self.window, "height", 0) or 0), sh))
+            target_x = int(work.left + (sw - target_w) / 2)
+            target_y = int(work.top)
+
+            ok = user32.SetWindowPos(
+                wintypes.HWND(hwnd),
+                wintypes.HWND(HWND_TOPMOST),
+                target_x,
+                target_y,
+                target_w,
+                target_h,
+                SWP_NOACTIVATE,
+            )
+            if not ok:
+                return {"ok": False}
+
+            self.cfg["geometry"] = [target_x, target_y, target_w, target_h]
+            config.save(self.cfg)
+            log(f"Windows 窗口已移动到顶部: x={target_x}, y={target_y}, w={target_w}, h={target_h}")
+            return {"ok": True, "width": target_w, "height": target_h}
+        except Exception as e:
+            log(f"Windows 移动窗口到顶部失败: {e}")
+            return {"ok": False, "error": str(e)}
 
     # ---- 模式切换 ----
 
