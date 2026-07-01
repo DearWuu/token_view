@@ -318,9 +318,16 @@ class Api:
             keep_width = width <= 0
             height = max(80, min(1200, int(height)))
             layout = self.get_screen_layout()
-            screen_w = max(260, int(layout.get("width", 1200)))
-            max_w = screen_w if self._top_mode_width else max(260, int(screen_w * 0.92))
-            max_h = max(80, int(layout.get("height", 800)))
+            scale = float(layout.get("scale", 1.0) or 1.0)
+
+            # layout 返回物理像素（_screen_layout_windows 用 rcWork），
+            # JS 传来 CSS 逻辑像素，统一转到 CSS 逻辑像素比较
+            screen_w_phys = max(260, int(layout.get("width", 1200)))
+            screen_h_phys = max(80, int(layout.get("height", 800)))
+            screen_w_css = int(screen_w_phys / scale) if scale > 0 else screen_w_phys
+            screen_h_css = int(screen_h_phys / scale) if scale > 0 else screen_h_phys
+            max_w = screen_w_css if self._top_mode_width else max(260, int(screen_w_css * 0.92))
+            max_h = screen_h_css
 
             if self._top_mode_width:
                 width = int(self._top_mode_width)
@@ -722,11 +729,20 @@ class Api:
             if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
                 return {"ok": False}
 
+            # 窗口 DPI scale：把 JS 传来的 CSS 逻辑像素转成物理像素
+            scale = 1.0
+            try:
+                dpi = user32.GetDpiForWindow(wintypes.HWND(hwnd))
+                if dpi > 0:
+                    scale = dpi / 96.0
+            except Exception:
+                pass
+
             work = info.rcWork
             sw = max(320, int(work.right - work.left))
             sh = max(120, int(work.bottom - work.top))
             target_w = max(320, int(sw * 0.8))
-            target_h = max(80, min(int(height or getattr(self.window, "height", 0) or 0), sh))
+            target_h = max(80, min(int((height or 0) * scale), sh))
             target_x = int(work.left + (sw - target_w) / 2)
             target_y = int(work.top)
 
@@ -742,11 +758,15 @@ class Api:
             if not ok:
                 return {"ok": False}
 
+            # 返回 CSS 逻辑像素给 JS（state.topWidth、scheduleWindowFit 等）
+            css_w = max(260, int(target_w / scale)) if scale > 0 else target_w
+            css_h = max(80, int(target_h / scale)) if scale > 0 else target_h
             self.cfg["geometry"] = [target_x, target_y, target_w, target_h]
             config.save(self.cfg)
-            self._top_mode_width = target_w
-            log(f"Windows 窗口已移动到顶部: x={target_x}, y={target_y}, w={target_w}, h={target_h}")
-            return {"ok": True, "width": target_w, "height": target_h, "mode": "top"}
+            self._top_mode_width = css_w
+            log(f"Windows 窗口已移动到顶部: x={target_x}, y={target_y}, "
+                f"w={target_w}, h={target_h} (css={css_w}x{css_h}, scale={scale:.2f})")
+            return {"ok": True, "width": css_w, "height": css_h, "mode": "top"}
         except Exception as e:
             log(f"Windows 移动窗口到顶部失败: {e}")
             return {"ok": False, "error": str(e)}
@@ -765,6 +785,17 @@ class Api:
             HWND_TOPMOST = -1
             SWP_NOACTIVATE = 0x0010
 
+            # JS 传入的 width/height 是 CSS 逻辑像素，SetWindowPos 需要物理像素
+            scale = 1.0
+            try:
+                dpi = user32.GetDpiForWindow(wintypes.HWND(hwnd))
+                if dpi > 0:
+                    scale = dpi / 96.0
+            except Exception:
+                pass
+            phys_w = max(1, int(width * scale))
+            phys_h = max(1, int(height * scale))
+
             class RECT(ctypes.Structure):
                 _fields_ = [
                     ("left", wintypes.LONG),
@@ -782,15 +813,15 @@ class Api:
                 wintypes.HWND(HWND_TOPMOST),
                 int(rect.left),
                 int(rect.top),
-                int(width),
-                int(height),
+                phys_w,
+                phys_h,
                 SWP_NOACTIVATE,
             )
             if not ok:
                 return False
-            self.cfg["geometry"] = [int(rect.left), int(rect.top), int(width), int(height)]
+            self.cfg["geometry"] = [int(rect.left), int(rect.top), width, height]
             config.save(self.cfg)
-            log(f"Windows 窗口已按内容缩放: w={width}, h={height}")
+            log(f"Windows 窗口已按内容缩放: w={width}, h={height} (phys={phys_w}x{phys_h}, scale={scale:.2f})")
             return True
         except Exception as e:
             log(f"Windows 按内容缩放窗口失败: {e}")

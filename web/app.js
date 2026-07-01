@@ -15,7 +15,7 @@ const state = {
 
 const PANEL_WIDTH = 420;
 const COMPACT_PANEL_WIDTH = 280;
-const WINDOW_HEIGHT_PADDING = 24;
+const WINDOW_HEIGHT_PADDING = 0;
 
 // 颜色配置
 const BADGE_COLORS = {
