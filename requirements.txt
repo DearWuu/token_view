@@ -1,6 +1,8 @@
-PySide6>=6.6          # 含 QtWebEngine（用于 OpenCode 内嵌登录）
-requests>=2.31
-websocket-client>=1.6
-pywebview>=5.0
-pystray>=0.19
-pillow>=10.0
+pywebview>=5.0        # 桌面客户端主壳（WebView2/WKWebView）
+requests>=2.31         # HTTP 请求
+websocket-client>=1.6  # CDP 协议通讯
+pystray>=0.19          # 系统托盘
+pillow>=10.0           # 托盘图标生成
+
+# 开发依赖（生产可移除）
+pytest>=7.4            # 单元测试
