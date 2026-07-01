@@ -286,6 +286,42 @@ class Api:
         """获取保存的窗口位置。"""
         return self.cfg.get("geometry")
 
+    def move_window(self, x: int, y: int) -> bool:
+        """移动窗口到指定坐标（CSS 逻辑像素）。"""
+        try:
+            if not self.window:
+                return False
+            import platform
+            if platform.system() == "Windows":
+                import ctypes
+                from ctypes import wintypes
+                hwnd = self._window_hwnd_windows()
+                if hwnd:
+                    user32 = ctypes.windll.user32
+                    scale = 1.0
+                    try:
+                        dpi = user32.GetDpiForWindow(wintypes.HWND(hwnd))
+                        if dpi > 0:
+                            scale = dpi / 96.0
+                    except Exception:
+                        pass
+                    phys_x = int(x * scale)
+                    phys_y = int(y * scale)
+                    SWP_NOSIZE = 0x0001
+                    SWP_NOZORDER = 0x0004
+                    SWP_NOACTIVATE = 0x0010
+                    user32.SetWindowPos(
+                        wintypes.HWND(hwnd), None,
+                        phys_x, phys_y, 0, 0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                    return True
+            self.window.move(x, y)
+            return True
+        except Exception as e:
+            log(f"移动窗口失败: {e}")
+            return False
+
     def get_screen_layout(self) -> Dict[str, Any]:
         """获取当前窗口所在屏幕的工作区。"""
         try:

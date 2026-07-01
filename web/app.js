@@ -7,6 +7,7 @@ const state = {
     dock: false,
     topMode: false,
     topWidth: null,
+    manualWidth: null,
     onTop: true,
     refreshInterval: 60000,
     timer: null,
@@ -72,6 +73,9 @@ function desiredPanelWidth() {
             return state.topWidth;
         }
         return Math.max(window.innerWidth || PANEL_WIDTH, PANEL_WIDTH);
+    }
+    if (state.manualWidth) {
+        return state.manualWidth;
     }
     return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
 }
@@ -302,6 +306,7 @@ async function toggleCompact() {
     state.compact = !state.compact;
     state.topMode = false;
     state.topWidth = null;
+    state.manualWidth = null;
     state.widthScale = 1;
     document.body.classList.toggle('compact', state.compact);
     document.body.classList.remove('top-mode');
@@ -321,6 +326,7 @@ async function moveToTop() {
     if (window.pywebview && window.pywebview.api) {
         state.topMode = true;
         state.topWidth = null;
+        state.manualWidth = null;
         state.widthScale = 1;
         applyPanelWidth();
         document.body.classList.add('top-mode');
@@ -384,6 +390,82 @@ async function closeWindow() {
     }
 }
 
+// ---- 手动拖拽缩放 ----
+// 无边框窗口需要 JS 手动处理 8 个方向的缩放
+const resizeState = { dragging: false, dir: '', startX: 0, startY: 0, startW: 0, startH: 0, startWinX: 0, startWinY: 0 };
+
+function startResize(e, dir) {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeState.dragging = true;
+    resizeState.dir = dir;
+    resizeState.startX = e.screenX;
+    resizeState.startY = e.screenY;
+    resizeState.startW = window.innerWidth;
+    resizeState.startH = window.innerHeight;
+    resizeState.startWinX = window.screenX;
+    resizeState.startWinY = window.screenY;
+    document.addEventListener('mousemove', onResizeMove);
+    document.addEventListener('mouseup', onResizeEnd);
+}
+
+function onResizeMove(e) {
+    if (!resizeState.dragging) return;
+    const dx = e.screenX - resizeState.startX;
+    const dy = e.screenY - resizeState.startY;
+    const d = resizeState.dir;
+    let newW = resizeState.startW;
+    let newH = resizeState.startH;
+    let newX = resizeState.startWinX;
+    let newY = resizeState.startWinY;
+
+    if (d.includes('e')) newW = resizeState.startW + dx;
+    if (d.includes('s')) newH = resizeState.startH + dy;
+    if (d.includes('w')) { newW = resizeState.startW - dx; newX = resizeState.startWinX + dx; }
+    if (d.includes('n')) { newH = resizeState.startH - dy; newY = resizeState.startWinY + dy; }
+
+    newW = Math.max(260, Math.min(newW, 2000));
+    newH = Math.max(80, Math.min(newH, 1200));
+
+    // 同步更新 CSS --panel-width，让内容跟着窗口宽度 reflow
+    state.manualWidth = newW;
+    applyPanelWidth();
+
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.resize_window_to_content(newW, newH);
+        if (newX !== resizeState.startWinX || newY !== resizeState.startWinY) {
+            window.pywebview.api.move_window(newX, newY);
+        }
+    }
+}
+
+function onResizeEnd() {
+    resizeState.dragging = false;
+    document.removeEventListener('mousemove', onResizeMove);
+    document.removeEventListener('mouseup', onResizeEnd);
+    // 不调 scheduleWindowFit —— 手动缩放后保留用户设定的尺寸，
+    // manualWidth 已在 onResizeMove 中设置，desiredPanelWidth 会优先使用它
+}
+
+function initResizeHandles() {
+    const handles = [
+        ['resize-grip', 'se'],
+        ['resize-e', 'e'],
+        ['resize-s', 's'],
+        ['resize-w', 'w'],
+        ['resize-n', 'n'],
+        ['resize-ne', 'ne'],
+        ['resize-nw', 'nw'],
+        ['resize-sw', 'sw'],
+    ];
+    handles.forEach(([id, dir]) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('mousedown', (e) => startResize(e, dir));
+        }
+    });
+}
+
 // 初始化
 async function init() {
     // 检测平台，Windows 上禁用透明
@@ -398,6 +480,9 @@ async function init() {
     elements.btnPin.addEventListener('click', toggleOnTop);
     elements.btnSettings.addEventListener('click', openSettings);
     elements.btnClose.addEventListener('click', closeWindow);
+
+    // 绑定缩放手柄
+    initResizeHandles();
 
     // 加载配置
     if (window.pywebview && window.pywebview.api) {

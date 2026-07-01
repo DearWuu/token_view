@@ -410,13 +410,15 @@ body.top-mode:not(.compact) .usage-note {
 /* Resize 手柄 */
 .resize-grip {
     position: absolute;
-    bottom: 4px;
-    right: 4px;
-    width: 14px;
-    height: 14px;
+    bottom: 0;
+    right: 0;
+    width: 16px;
+    height: 16px;
     cursor: nwse-resize;
     opacity: 0;
     transition: opacity var(--transition-fast);
+    -webkit-app-region: no-drag;
+    z-index: 100;
 }
 
 .resize-grip:hover {
@@ -424,6 +426,25 @@ body.top-mode:not(.compact) .usage-note {
     background: rgba(110, 140, 255, 0.18);
     border-radius: 3px;
 }
+
+/* 边缘 resize 手柄 */
+.resize-edge {
+    position: absolute;
+    -webkit-app-region: no-drag;
+    z-index: 99;
+    opacity: 0;
+}
+.resize-edge:hover {
+    opacity: 1;
+    background: rgba(110, 140, 255, 0.12);
+}
+.resize-edge-e { right: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.resize-edge-s { bottom: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.resize-edge-w { left: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.resize-edge-n { top: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.resize-edge-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.resize-edge-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.resize-edge-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
 
 /* 简略模式 - 单行供应商 + 短指标 */
 body.compact .container {
@@ -647,7 +668,8 @@ body.dock-mode .usage-note {
     display: none;
 }
 
-body.dock-mode .resize-grip {
+body.dock-mode .resize-grip,
+body.dock-mode .resize-edge {
     display: none;
 }
 
