@@ -394,7 +394,6 @@ class OpenCodeProvider(BaseProvider):
         wsid = (self.cfg.get("workspace_id") or "").strip()
         if not wsid:
             page_url = page.get("url") or ""
-            import re
             m = re.search(r"(wrk_[A-Z0-9]+)", page_url)
             if m:
                 wsid = m.group(1)
@@ -409,14 +408,128 @@ class OpenCodeProvider(BaseProvider):
             data.status, data.error = "error", "CDP target 缺少 webSocketDebuggerUrl"
             return data
 
-        # 优先主动重新 fetch 页面里出现过的同源接口；拿不到再回退读 DOM。
-        js = (
+        # OpenCode 是 SolidJS SPA，用量数据由 JS 水合后渲染到 DOM。
+        # 直接 fetch 页面 URL 返回的是 HTML 不含 JSON 用量字段，
+        # 读 DOM 又只能拿到上次页面加载时的旧数据。
+        # 解决：用 CDP Page.reload 重新加载页面（忽略缓存），
+        # 等加载完 + SPA 水合后读 DOM，拿到最新数据。
+        try:
+            ws = ws_connect(
+                ws_url, timeout=30,
+                origin="http://127.0.0.1:" + str(self.cfg.get("cdp_port") or 9222),
+            )
+        except Exception as e:
+            data.status = "error"
+            data.error = f"CDP 通信失败: {e}"
+            log(f"OpenCode CDP WebSocket 连接失败: {e}")
+            return data
+
+        try:
+            # 1) 启用 Page 域
+            ws.send(json.dumps({"id": 1, "method": "Page.enable"}))
+            self._cdp_recv_until_id(ws, 1, timeout=5)
+
+            # 2) 重新加载页面（忽略缓存）
+            ws.send(json.dumps({
+                "id": 2, "method": "Page.reload",
+                "params": {"ignoreCache": True},
+            }))
+
+            # 3) 等待 Page.loadEventFired 事件
+            loaded = self._cdp_wait_event(ws, "Page.loadEventFired", timeout=30)
+            if not loaded:
+                ws.close()
+                data.status = "error"
+                data.error = "页面重新加载超时"
+                return data
+
+            # 4) 等待 SPA 水合完成
+            time.sleep(2)
+
+            # 5) 读 DOM 中的用量百分比
+            js = self._opencode_read_dom_js()
+            ws.send(json.dumps({
+                "id": 3, "method": "Runtime.evaluate",
+                "params": {"expression": js, "awaitPromise": True,
+                           "returnByValue": True},
+            }))
+
+            raw = self._cdp_recv_until_id(ws, 3, timeout=10)
+            ws.close()
+
+            if not raw:
+                data.status, data.error = "error", "读取 DOM 超时"
+                return data
+
+        except Exception as e:
+            try:
+                ws.close()
+            except Exception:
+                pass
+            data.status = "error"
+            data.error = f"CDP 通信失败: {e}"
+            log(f"OpenCode CDP WebSocket 异常: {e}")
+            return data
+
+        # 6) 解析结果
+        try:
+            resp = json.loads(raw)
+        except ValueError as e:
+            data.status, data.error = "error", f"CDP 响应非 JSON: {e}"
+            return data
+
+        result = resp.get("result", {}).get("result", {})
+        if result.get("type") == "undefined" or "value" not in result:
+            exc = resp.get("result", {}).get("exceptionDetails")
+            if exc:
+                msg = (exc.get("exception", {}) or {}).get("description") or exc.get("text")
+                data.status = "error"
+                data.error = f"DOM 读取失败: {msg}"
+                return data
+            data.status, data.error = "error", "CDP 返回 undefined"
+            return data
+
+        text = result.get("value") or ""
+        log(f"OpenCode CDP DOM 读取: {text[:500]}")
+        if not text.strip():
+            data.status, data.error = "error", "DOM 读取为空"
+            return data
+
+        return self._parse_response(text, data)
+
+    @staticmethod
+    def _cdp_recv_until_id(ws, msg_id, timeout=10):
+        """读取 CDP WebSocket 消息直到收到指定 id 的响应。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                raw = ws.recv()
+                msg = json.loads(raw)
+                if msg.get("id") == msg_id:
+                    return raw
+            except Exception:
+                break
+        return None
+
+    @staticmethod
+    def _cdp_wait_event(ws, method, timeout=30):
+        """等待指定的 CDP 事件。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                raw = ws.recv()
+                msg = json.loads(raw)
+                if msg.get("method") == method:
+                    return msg
+            except Exception:
+                break
+        return None
+
+    @staticmethod
+    def _opencode_read_dom_js():
+        """生成读取 OpenCode 页面 DOM 用量的 JS。"""
+        return (
             "(async()=>{"
-            "const out={source:'none',url:'',status:0,body:'',dom:null,errors:[]};"
-            "const hasUsage=t=>/rollingUsage|weeklyUsage|monthlyUsage|usagePercent/i.test(t||'');"
-            "const sameOrigin=u=>{try{return new URL(u,location.href).origin===location.origin}catch(e){return false}};"
-            "const addTs=u=>{const x=new URL(u,location.href);x.searchParams.set('_tv',Date.now());return x.href};"
-            "const readDom=()=>{"
             "const texts=document.body.innerText||'';"
             "const results={};"
             "const rollingMatch=texts.match(/5[Hh].*?(\\d+(?:\\.\\d+)?)\\s*%/);"
@@ -426,63 +539,9 @@ class OpenCodeProvider(BaseProvider):
             "const monthlyMatch=texts.match(/[Mm]onthly.*?(\\d+(?:\\.\\d+)?)\\s*%|月.*?(\\d+(?:\\.\\d+)?)\\s*%/);"
             "if(monthlyMatch)results.monthly=parseFloat(monthlyMatch[1]||monthlyMatch[2]);"
             "results.allPcts=[...texts.matchAll(/(\\d+(?:\\.\\d)?)\\s*%/g)].map(m=>parseFloat(m[1]));"
-            "return results;"
-            "};"
-            "let urls=[];"
-            "try{urls=performance.getEntriesByType('resource').map(e=>e.name)"
-            ".filter(sameOrigin).filter(u=>/(usage|__server|workspace|api|go|trpc|rpc)/i.test(u));}catch(e){}"
-            f"urls.unshift(new URL('/workspace/'+{json.dumps(wsid)}+'/go',location.origin).href);"
-            "urls.unshift(location.href);"
-            "urls=[...new Set(urls)];"
-            "for(const u of urls){"
-            "try{"
-            "const r=await fetch(addTs(u),{credentials:'include',cache:'no-store',"
-            "headers:{'Accept':'application/json, text/plain, */*','Cache-Control':'no-cache','Pragma':'no-cache'}});"
-            "const t=await r.text();"
-            "if(hasUsage(t)){out.source='network';out.url=u;out.status=r.status;out.body=t.slice(0,200000);out.dom=readDom();return JSON.stringify(out);}"
-            "out.errors.push({url:u,status:r.status,len:t.length});"
-            "}catch(e){out.errors.push({url:u,error:String(e).slice(0,120)});}"
-            "}"
-            "out.source='dom';out.dom=readDom();return JSON.stringify(out);"
+            "return JSON.stringify(results);"
             "})()"
         )
-
-        try:
-            ws = ws_connect(
-                ws_url, timeout=15,
-                origin="http://127.0.0.1:" + str(self.cfg.get("cdp_port") or 9222),
-            )
-            ws.send(json.dumps({
-                "id": 1, "method": "Runtime.evaluate",
-                "params": {"expression": js, "awaitPromise": True,
-                           "returnByValue": True},
-            }))
-            raw = ws.recv()
-            ws.close()
-        except Exception as e:
-            data.status = "error"
-            data.error = f"CDP 通信失败: {e}"
-            log(f"OpenCode CDP WebSocket 异常: {e}")
-            return data
-
-        try:
-            resp = json.loads(raw)
-        except ValueError as e:
-            data.status, data.error = "error", f"CDP 响应非 JSON: {e}"
-            return data
-
-        result = resp.get("result", {}).get("result", {})
-        if result.get("type") == "undefined" or "value" not in result:
-            data.status, data.error = "error", "CDP 返回 undefined"
-            return data
-
-        text = result.get("value") or ""
-        log(f"OpenCode CDP 返回: {text[:500]}")
-        if not text.strip():
-            data.status, data.error = "error", "API 返回空"
-            return data
-
-        return self._parse_response(text, data)
 
     def _parse_response(self, text: str, data: UsageData) -> UsageData:
         try:
@@ -621,12 +680,6 @@ class OpenCodeProvider(BaseProvider):
         elif isinstance(obj, str) and "usagePercent" in obj:
             return self._parse_usage_text(obj, data)
         return found
-        if nums:
-            # 尝试从上下文找百分比文字
-            m = re.search(r"(\d+(?:\.\d+)?)\s*%", ctx)
-            if m:
-                return float(m.group(1))
-        return None
 
     @staticmethod
     def _surrounding_text(html: str, idx: int, window: int) -> str:
