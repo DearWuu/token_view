@@ -14,9 +14,8 @@ const state = {
 };
 
 const PANEL_WIDTH = 420;
-const COMPACT_PANEL_WIDTH = 340;
+const COMPACT_PANEL_WIDTH = 280;
 const WINDOW_HEIGHT_PADDING = 24;
-const MAX_WIDTH_SCALE = 2.5;
 
 // 颜色配置
 const BADGE_COLORS = {
@@ -34,6 +33,37 @@ function colorForPercent(pct) {
 
 function formatReset(note) {
     return note || '';
+}
+
+function shortUsageLabel(label) {
+    const text = String(label || '').trim().toLowerCase();
+    if (text.includes('5') || text.includes('rolling')) return '5h';
+    if (text.includes('week') || text.includes('周')) return '周';
+    if (text.includes('month') || text.includes('月')) return '月';
+    if (text.includes('mcp')) return 'MCP';
+    return String(label || '').trim().slice(0, 3) || '用量';
+}
+
+function normalizedCompactItems(items) {
+    const slots = [
+        { key: '5h', label: '5h', percent: 0 },
+        { key: 'week', label: '周', percent: 0 },
+        { key: 'month', label: '月', percent: 0 }
+    ];
+    (items || []).forEach(item => {
+        const shortLabel = shortUsageLabel(item.label);
+        const slot = shortLabel === '5h'
+            ? slots[0]
+            : shortLabel === '周'
+                ? slots[1]
+                : shortLabel === '月'
+                    ? slots[2]
+                    : null;
+        if (slot) {
+            slot.percent = Number(item.percent || 0);
+        }
+    });
+    return slots;
 }
 
 function desiredPanelWidth() {
@@ -54,12 +84,7 @@ function nativeWidthForCss(cssWidth) {
     if (state.topMode) {
         return 0;
     }
-    const viewportWidth = window.innerWidth || cssWidth;
-    if (viewportWidth > 0 && viewportWidth < cssWidth - 2) {
-        const neededScale = Math.min(MAX_WIDTH_SCALE, cssWidth / viewportWidth);
-        state.widthScale = Math.max(state.widthScale || 1, neededScale);
-    }
-    return Math.ceil(cssWidth * (state.widthScale || 1));
+    return Math.ceil(cssWidth);
 }
 
 function measurePanelSize() {
@@ -87,8 +112,9 @@ function measurePanelSize() {
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
     const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
     const height = Math.ceil(summedHeight + WINDOW_HEIGHT_PADDING);
+    const measuredWidth = Math.ceil(container.getBoundingClientRect().width || cssWidth);
     return {
-        width: nativeWidthForCss(cssWidth),
+        width: nativeWidthForCss(measuredWidth),
         height: Math.max(80, height)
     };
 }
@@ -141,12 +167,14 @@ function createCardHTML(provider) {
     if (provider.status === 'error') {
         itemsHTML = `<div class="error-message">⚠ ${(provider.error || '').substring(0, 50)}</div>`;
     } else if (provider.items && provider.items.length > 0) {
-        itemsHTML = provider.items.map(item => {
+        const sourceItems = state.compact ? normalizedCompactItems(provider.items) : provider.items;
+        itemsHTML = sourceItems.map(item => {
             const itemColorClass = colorForPercent(item.percent);
+            const shortLabel = shortUsageLabel(item.label);
             return `
                 <div class="usage-item">
                     <div class="usage-row">
-                        <span class="usage-label">${item.label}</span>
+                        <span class="usage-label" data-short="${shortLabel}">${item.label}</span>
                         <div class="progress-bar">
                             <div class="progress-fill ${itemColorClass}" 
                                  style="width: ${item.percent}%"></div>
@@ -199,8 +227,35 @@ function renderCards(providers) {
     scheduleWindowFit();
 }
 
+function applyProviderUpdates(providers) {
+    if (!providers || providers.length === 0) {
+        elements.container.innerHTML = '';
+        state.cards = {};
+        elements.emptyTip.style.display = 'block';
+        scheduleWindowFit();
+        return;
+    }
+
+    elements.emptyTip.style.display = 'none';
+    const incomingIds = new Set();
+    providers.forEach(provider => {
+        incomingIds.add(provider.id);
+        updateCard(provider, false);
+    });
+
+    elements.container.querySelectorAll('.card').forEach(card => {
+        const id = card.dataset.id;
+        if (!incomingIds.has(id)) {
+            card.remove();
+            delete state.cards[id];
+        }
+    });
+
+    scheduleWindowFit();
+}
+
 // 更新单个卡片
-function updateCard(provider) {
+function updateCard(provider, fit = true) {
     const existingCard = elements.container.querySelector(`[data-id="${provider.id}"]`);
     if (existingCard) {
         existingCard.outerHTML = createCardHTML(provider);
@@ -208,30 +263,35 @@ function updateCard(provider) {
         elements.container.insertAdjacentHTML('beforeend', createCardHTML(provider));
     }
     state.cards[provider.id] = provider;
-    scheduleWindowFit();
+    if (fit) {
+        scheduleWindowFit();
+    }
 }
 
 // 刷新数据
 async function refresh() {
+    const hasCards = Object.keys(state.cards).length > 0;
     elements.btnRefresh.disabled = true;
-    elements.loading.classList.add('active');
+    elements.btnRefresh.classList.add('active');
+    if (!hasCards) {
+        elements.loading.classList.add('active');
+    }
 
     try {
-        // 设置所有卡片为 loading 状态
-        Object.values(state.cards).forEach(card => {
-            card.status = 'loading';
-            updateCard(card);
-        });
-
-        // 调用 Python API 获取数据
+        // 只重新请求 provider 数据，回来后按卡片局部更新，不做整窗重绘。
         if (window.pywebview && window.pywebview.api) {
             const providers = await window.pywebview.api.get_usage();
-            renderCards(providers);
+            if (hasCards) {
+                applyProviderUpdates(providers);
+            } else {
+                renderCards(providers);
+            }
         }
     } catch (error) {
         console.error('刷新失败:', error);
     } finally {
         elements.btnRefresh.disabled = false;
+        elements.btnRefresh.classList.remove('active');
         elements.loading.classList.remove('active');
     }
 }
@@ -249,6 +309,7 @@ async function toggleCompact() {
     elements.btnMode.textContent = state.compact ? '⤢' : '⤡';
     
     if (window.pywebview && window.pywebview.api) {
+        await window.pywebview.api.set_top_mode(false);
         await window.pywebview.api.set_compact(state.compact);
     }
     scheduleWindowFit();
@@ -347,6 +408,7 @@ async function init() {
             state.topWidth = null;
             state.onTop = cfg.always_on_top !== false;
             state.opacity = cfg.opacity || 0.92;
+            await window.pywebview.api.set_top_mode(false);
             
             // 设置模式
             document.body.classList.toggle('compact', state.compact);

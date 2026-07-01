@@ -13,6 +13,25 @@ import config
 from api import Api
 from logger import log
 
+
+def enable_windows_dpi_awareness():
+    """Windows 高 DPI：优先启用 Per-Monitor DPI Aware v2。"""
+    if platform.system() != 'Windows':
+        return
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            log("Windows DPI 感知已设置: Per-Monitor")
+            return
+        except Exception:
+            pass
+        ctypes.windll.user32.SetProcessDPIAware()
+        log("Windows DPI 感知已设置: System")
+    except Exception as e:
+        log(f"设置 Windows DPI 感知失败: {e}")
+
+
 # macOS 特定：设置窗口级别
 if platform.system() == 'Darwin':
     try:
@@ -75,6 +94,8 @@ def set_window_on_top_macos(on_top=True):
 
 
 def main():
+    enable_windows_dpi_awareness()
+
     cfg = config.load()
     api = Api()
     

@@ -144,7 +144,7 @@ body.top-mode .container {
 
 /* 卡片容器 */
 .cards-container {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     padding: 0 8px 8px;
     overflow-x: hidden;
     overflow-y: auto;
@@ -152,6 +152,8 @@ body.top-mode .container {
     flex-direction: column;
     gap: 8px;
     min-width: 0;
+    min-height: 0;
+    max-height: calc(100vh - 48px);
 }
 
 .cards-container::-webkit-scrollbar {
@@ -375,7 +377,7 @@ body.top-mode .container {
     border-radius: 3px;
 }
 
-/* 简略模式 - 保持垂直布局，更紧凑精美 */
+/* 简略模式 - 单行供应商 + 短指标 */
 body.compact .container {
     width: min(var(--panel-width), 100vw);
 }
@@ -384,23 +386,70 @@ body.compact.top-mode .container {
     width: min(var(--panel-width), 100vw);
 }
 
+body.compact.top-mode .cards-container {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    padding: 0 8px 8px;
+    overflow-x: hidden;
+    overflow-y: hidden;
+}
+
+body.compact.top-mode .card {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 10px;
+}
+
+body.compact.top-mode .card-header {
+    flex: 0 1 180px;
+    min-width: 90px;
+}
+
+body.compact.top-mode .card-body {
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+body.compact.top-mode .usage-item {
+    flex: 1 1 64px;
+    max-width: none;
+    min-width: 52px;
+    padding: 3px 8px;
+}
+
+body.compact.top-mode .usage-row {
+    justify-content: center;
+}
+
+body.compact.top-mode .usage-percent {
+    min-width: 24px;
+}
+
 body.compact .titlebar {
     padding: 8px 12px 4px;
 }
 
 body.compact .cards-container {
     padding: 0 6px 6px;
-    gap: 5px;
+    gap: 4px;
+    max-height: calc(100vh - 38px);
 }
 
 body.compact .card {
-    padding: 9px 10px;
-    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+    border-radius: 9px;
+    min-height: 34px;
 }
 
 body.compact .card-header {
-    margin-bottom: 5px;
+    margin-bottom: 0;
     gap: 6px;
+    flex: 0 1 104px;
+    min-width: 64px;
 }
 
 body.compact .badge {
@@ -412,40 +461,64 @@ body.compact .badge {
 
 body.compact .card-title {
     font-size: 11px;
-}
-
-body.compact .card-level {
-    font-size: 9px;
-    padding: 1px 5px;
-}
-
-body.compact .card-body {
-    gap: 5px;
-}
-
-body.compact .usage-item {
-    gap: 2px;
-}
-
-body.compact .usage-row {
-    gap: 6px;
-    grid-template-columns: minmax(44px, 0.8fr) minmax(42px, 1fr) minmax(34px, auto);
-}
-
-body.compact .usage-label {
-    font-size: 10px;
     min-width: 0;
 }
 
-body.compact .progress-bar {
-    height: 5px;
+body.compact .card-level {
+    display: none;
+}
+
+body.compact .status-dot {
+    display: none;
+}
+
+body.compact .card-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    justify-content: stretch;
+    gap: 4px;
+    overflow: hidden;
+}
+
+body.compact .usage-item {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 2px 5px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+body.compact .usage-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+}
+
+body.compact .usage-label {
+    font-size: 0;
+    min-width: 0;
+    max-width: 30px;
+    flex: 0 0 auto;
+}
+
+body.compact .usage-label::before {
+    content: attr(data-short);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-secondary);
 }
 
 body.compact .usage-percent {
-    font-size: 11px;
-    min-width: 35px;
+    font-size: 10px;
+    min-width: 22px;
+    text-align: left;
 }
 
+body.compact .progress-bar,
 body.compact .usage-note {
     display: none;
 }
