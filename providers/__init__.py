@@ -7,9 +7,10 @@
   - fmt_tokens(n)         token 数字格式化
 
 支持的 type：
-  - "zhipu"      智谱 GLM Coding Plan（CDP/cookie/API key 三模式）
-  - "opencode"   OpenCode Go（CDP 模式）
-  - "mimo"       小米 MiMo Token Plan（CDP 模式）
+  - "zhipu"       智谱 GLM Coding Plan（CDP/cookie/API key 三模式）
+  - "opencode"    OpenCode Go（CDP 模式）
+  - "mimo"        小米 MiMo Token Plan（CDP 模式）
+  - "volcengine"  火山引擎 Ark Agent Plan（CDP 模式）
 
 详见各 provider 子模块的 docstring。
 """
@@ -22,6 +23,7 @@ from .base import (
 from .opencode import OpenCodeProvider
 from .zhipu import ZhipuProvider
 from .mimo import MimoProvider
+from .volcengine import VolcEngineProvider
 
 
 def build(cfg: dict) -> BaseProvider:
@@ -33,6 +35,8 @@ def build(cfg: dict) -> BaseProvider:
         return OpenCodeProvider(cfg)
     if ptype == "mimo":
         return MimoProvider(cfg)
+    if ptype == "volcengine":
+        return VolcEngineProvider(cfg)
     raise ValueError(f"未知 provider 类型: {ptype!r}")
 
 
@@ -44,5 +48,6 @@ __all__ = [
     "ZhipuProvider",
     "OpenCodeProvider",
     "MimoProvider",
+    "VolcEngineProvider",
     "build",
 ]

@@ -270,6 +270,7 @@ body.top-mode:not(.compact) .usage-note {
 .badge-zhipu { background: var(--color-blue); }
 .badge-opencode { background: var(--color-purple); }
 .badge-mimo { background: var(--color-orange); }
+.badge-volcengine { background: #e11d48; }
 
 .card-title {
     font-size: 13px;

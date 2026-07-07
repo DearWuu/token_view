@@ -122,4 +122,12 @@ def new_provider(ptype: str) -> dict:
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",
         })
+    elif ptype == "volcengine":
+        base.update({
+            "cookie": "",
+            "name": "火山 Ark",
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
     return base

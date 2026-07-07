@@ -22,7 +22,8 @@ const WINDOW_HEIGHT_PADDING = 0;
 const BADGE_COLORS = {
     zhipu: { bg: '#3b82f6', text: '智' },
     opencode: { bg: '#a855f7', text: 'OC' },
-    mimo: { bg: '#ff6900', text: 'Mi' }
+    mimo: { bg: '#ff6900', text: 'Mi' },
+    volcengine: { bg: '#e11d48', text: '火' }
 };
 
 // 工具函数

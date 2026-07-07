@@ -226,6 +226,7 @@
             <button class="btn btn-small" onclick="addProvider('zhipu')">＋ 智谱</button>
             <button class="btn btn-small" onclick="addProvider('opencode')">＋ OpenCode</button>
             <button class="btn btn-small" onclick="addProvider('mimo')">＋ MiMo</button>
+            <button class="btn btn-small" onclick="addProvider('volcengine')">＋ 火山</button>
         </div>
         <div class="provider-list" id="provider-list">
             <!-- 动态生成 -->
@@ -314,6 +315,23 @@
             <button class="btn btn-small" onclick="launchCdp('mimo')">🚀 启动调试 Chrome</button>
         </div>
 
+        <!-- 火山 Ark 特有字段 -->
+        <div id="volcengine-fields" class="hidden">
+            <div class="form-group">
+                <label>Cookie</label>
+                <input type="text" id="edit-volcengine-cookie" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-volcengine-cdp-enabled" checked>
+                <label for="edit-volcengine-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-volcengine-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <button class="btn btn-small" onclick="launchCdp('volcengine')">🚀 启动调试 Chrome</button>
+        </div>
+
         <div class="provider-actions">
             <button class="btn btn-small" onclick="saveProvider()">保存</button>
             <button class="btn btn-small btn-danger" onclick="deleteProvider()">删除</button>
@@ -392,6 +410,7 @@
             document.getElementById('zhipu-fields').classList.add('hidden');
             document.getElementById('opencode-fields').classList.add('hidden');
             document.getElementById('mimo-fields').classList.add('hidden');
+            document.getElementById('volcengine-fields').classList.add('hidden');
 
             // 显示对应的特有字段
             if (provider.type === 'zhipu') {
@@ -413,6 +432,11 @@
                 document.getElementById('edit-mimo-cookie').value = provider.cookie || '';
                 document.getElementById('edit-mimo-cdp-enabled').checked = provider.cdp_enabled !== false;
                 document.getElementById('edit-mimo-cdp-port').value = provider.cdp_port || 9222;
+            } else if (provider.type === 'volcengine') {
+                document.getElementById('volcengine-fields').classList.remove('hidden');
+                document.getElementById('edit-volcengine-cookie').value = provider.cookie || '';
+                document.getElementById('edit-volcengine-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-volcengine-cdp-port').value = provider.cdp_port || 9222;
             }
 
             renderProviders();
@@ -474,6 +498,11 @@
                 provider.cdp_enabled = document.getElementById('edit-mimo-cdp-enabled').checked;
                 provider.cdp_port = parseInt(document.getElementById('edit-mimo-cdp-port').value);
                 provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            } else if (provider.type === 'volcengine') {
+                provider.cookie = document.getElementById('edit-volcengine-cookie').value;
+                provider.cdp_enabled = document.getElementById('edit-volcengine-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-volcengine-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
             }
 
             // 保存到后端
@@ -500,6 +529,9 @@
             } else if (type === 'mimo') {
                 port = parseInt(document.getElementById('edit-mimo-cdp-port').value);
                 url = 'https://platform.xiaomimimo.com/console/plan-manage';
+            } else if (type === 'volcengine') {
+                port = parseInt(document.getElementById('edit-volcengine-cdp-port').value);
+                url = 'https://console.volcengine.com/ark/region:cn-beijing/subscription/agent-plan?projectName=default';
             }
 
             if (window.pywebview && window.pywebview.api) {
