@@ -388,6 +388,7 @@ async function toggleDock() {
 // （避免 WebView2 在 set_dock_hidden 改 y 后重派 mouseenter/mouseleave
 // 造成死循环）。
 // 物理位置通过 api.set_dock_hidden(true/false) 切，CSS 只负责 cursor 指示。
+const DOCK_HIDE_MARGIN = 20;  // 鼠标离开内容后多少像素内不触发隐藏
 function setupDockAutoHide() {
     let leaveTimer = null;
     const setHidden = (hidden) => {
@@ -403,20 +404,54 @@ function setupDockAutoHide() {
         if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
         setHidden(false);
     }, true);
-    document.addEventListener('mouseleave', () => {
-        if (leaveTimer) clearTimeout(leaveTimer);
-        leaveTimer = setTimeout(() => {
-            leaveTimer = null;
-            setHidden(true);
-        }, 200);
-    }, true);
+
+    // 用 mousemove 检测鼠标是否离开内容区域 + 缓冲区间，
+    // 代替 mouseleave（mouseleave 在视口边界就触发，没有缓冲）。
     document.addEventListener('mousemove', (e) => {
-        // 用 screenY（屏幕绝对坐标）判断是否接近屏幕顶部。
-        // clientY 是 WebView 内部坐标，y=-240 时屏幕 y=0 对应 clientY=240，< 4 不成立
-        if (state.dockMode && state.dockHidden && e.screenY < 4) {
+        if (!state.dockMode || resizeState.dragging) return;
+
+        // 鼠标在视口内的位置，判断是否在边缘缓冲区外
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const cx = e.clientX;
+        const cy = e.clientY;
+        const inContent = cx >= 0 && cx <= w && cy >= 0 && cy <= h;
+        const inMargin = cx >= -DOCK_HIDE_MARGIN && cx <= w + DOCK_HIDE_MARGIN
+                      && cy >= -DOCK_HIDE_MARGIN && cy <= h + DOCK_HIDE_MARGIN;
+
+        if (inContent) {
+            // 鼠标在窗口内，取消隐藏定时
+            if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
+            setHidden(false);
+        } else if (inMargin) {
+            // 鼠标在缓冲区间内，不触发隐藏（取消已有定时）
+            if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
+        } else {
+            // 鼠标超出缓冲区间，延迟隐藏
+            if (!leaveTimer) {
+                leaveTimer = setTimeout(() => {
+                    leaveTimer = null;
+                    setHidden(true);
+                }, 200);
+            }
+        }
+
+        // auto-hide 状态下鼠标接近屏幕顶部时恢复显示
+        if (state.dockHidden && e.screenY < 4) {
             setHidden(false);
         }
     });
+
+    // mouseleave 兜底：鼠标完全离开 WebView 且不在缓冲区
+    document.addEventListener('mouseleave', () => {
+        if (resizeState.dragging) return;
+        if (!leaveTimer) {
+            leaveTimer = setTimeout(() => {
+                leaveTimer = null;
+                setHidden(true);
+            }, 200);
+        }
+    }, true);
 }
 
 // 假透明度：改 --opacity-primary CSS 变量，背景透、文字/进度条保持清晰。
@@ -517,6 +552,12 @@ function onResizeEnd() {
     document.removeEventListener('mouseup', onResizeEnd);
     // 不调 scheduleWindowFit —— 手动缩放后保留用户设定的尺寸，
     // manualWidth 已在 onResizeMove 中设置，desiredPanelWidth 会优先使用它
+    // dock 模式下手动 resize 后重算 auto-hide 的 y 坐标
+    if (state.dockMode && state.dockHidden) {
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.set_dock_hidden(true);
+        }
+    }
 }
 
 function initResizeHandles() {

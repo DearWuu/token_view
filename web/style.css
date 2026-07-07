@@ -707,9 +707,21 @@ body.dock-mode .usage-note {
     display: none;
 }
 
+/* dock 模式下保留底部 + 左右边缘 + 底角手柄，隐藏顶部手柄避免跟 auto-hide 冲突 */
 body.dock-mode .resize-grip,
-body.dock-mode .resize-edge {
+body.dock-mode .resize-edge-n,
+body.dock-mode .resize-edge-ne,
+body.dock-mode .resize-edge-nw {
     display: none;
+}
+
+/* dock 模式下底部 + 左右边缘加粗，方便鼠标精确拖到 */
+body.dock-mode .resize-edge-s {
+    height: 8px;
+}
+body.dock-mode .resize-edge-e,
+body.dock-mode .resize-edge-w {
+    width: 8px;
 }
 
 body.dock-mode .empty-tip,
