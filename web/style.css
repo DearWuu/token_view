@@ -74,7 +74,6 @@ body.no-transparent {
 
 body.top-mode .container {
     width: min(var(--panel-width), 100vw);
-    font-size: 17px;     /* 顶部模式字号 +20%（默认 14 → 17） */
 }
 
 /* auto-hide dock 状态指示：隐藏时改 cursor */
@@ -641,12 +640,29 @@ body.dock-mode .cards-container {
 }
 
 body.dock-mode .card {
-    padding: 6px 14px;
+    padding: 8px 14px;
     border-radius: 6px;
     min-width: max-content;
 }
 
 body.dock-mode .card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 0;
+    flex: 0 0 auto;
+}
+
+body.dock-mode .card-title {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+body.dock-mode .card-level {
+    display: none;
+}
+
+body.dock-mode .status-dot {
     display: none;
 }
 
@@ -664,7 +680,7 @@ body.dock-mode .usage-item {
     min-width: max-content;
 }
 
-body.dock-mode .usage-label {
+body.dock-mode:not(.compact) .usage-label {
     font-size: 14px;
     font-weight: 500;
     min-width: 48px;

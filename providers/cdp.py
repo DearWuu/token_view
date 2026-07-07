@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Optional
 
 import requests
@@ -145,3 +146,77 @@ class CDPHarness:
                 raise CDPEvalError(f"页面内执行失败: {msg}")
             raise CDPEvalError("CDP 返回 undefined")
         return result
+
+    def page_reload(self, ws_url: str, ignore_cache: bool = True,
+                    wait_load: bool = True, settle: float = 1.0,
+                    timeout: Optional[int] = None) -> None:
+        """用 CDP Page.reload 重新加载页面，等加载完 + SPA 水合后返回。
+
+        用于 OpenCode 等 SPA 页面：直接读 DOM 只有旧数据，
+        reload 后才能拿到最新渲染结果。
+
+        抛出 CDPNotConnected / CDPEvalError。
+        """
+        if not HAS_WS:
+            raise CDPNotConnected("缺少 websocket-client 依赖")
+
+        t = timeout or self._eval_timeout
+        try:
+            ws = ws_connect(ws_url, timeout=t, origin=self.origin)
+        except Exception as e:  # noqa: BLE001
+            raise CDPNotConnected(f"WebSocket 连接失败: {e}") from e
+
+        try:
+            # 1) 启用 Page 域
+            ws.send(json.dumps({"id": 1, "method": "Page.enable"}))
+            self._recv_until_id(ws, 1, timeout=5)
+
+            # 2) 重新加载页面（忽略缓存）
+            ws.send(json.dumps({
+                "id": 2,
+                "method": "Page.reload",
+                "params": {"ignoreCache": ignore_cache},
+            }))
+
+            # 3) 等待 Page.loadEventFired 事件
+            if wait_load:
+                deadline = time.time() + t
+                loaded = False
+                while time.time() < deadline:
+                    try:
+                        raw = ws.recv()
+                        msg = json.loads(raw)
+                        if msg.get("method") == "Page.loadEventFired":
+                            loaded = True
+                            break
+                    except Exception:
+                        break
+                if not loaded:
+                    raise CDPEvalError("页面重新加载超时")
+
+            # 4) 等待 SPA 水合完成
+            if settle > 0:
+                time.sleep(settle)
+        except CDPError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise CDPNotConnected(f"Page.reload 通讯失败: {e}") from e
+        finally:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _recv_until_id(ws, msg_id: int, timeout: float = 5) -> str:
+        """读取 CDP WebSocket 消息直到收到指定 id 的响应。"""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                raw = ws.recv()
+                msg = json.loads(raw)
+                if msg.get("id") == msg_id:
+                    return raw
+            except Exception:
+                break
+        raise CDPEvalError(f"等待 CDP id={msg_id} 响应超时")

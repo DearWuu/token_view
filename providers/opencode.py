@@ -44,7 +44,7 @@ class OpenCodeProvider(BaseProvider):
             port=port,
             page_keyword="opencode.ai",
             cdp_url=self.cfg.get("cdp_url") or "",
-            eval_timeout=15,
+            eval_timeout=30,
         )
 
         try:
@@ -54,21 +54,27 @@ class OpenCodeProvider(BaseProvider):
 
         wsid = (self.cfg.get("workspace_id") or "").strip()
         if not wsid:
-            # 从页面 URL 自动提取
             m = re.search(r"(wrk_[A-Z0-9]+)", page.get("url") or "")
             if m:
                 wsid = m.group(1)
             else:
                 return self._err(data, "未配置 workspace_id，且无法从页面 URL 自动获取")
 
-        # 主动 fetch 同源 URL；找不到再回退读 DOM
+        ws_url = page.get("webSocketDebuggerUrl", "")
+
+        # OpenCode 是 SolidJS SPA，用量数据由 JS 水合后渲染到 DOM。
+        # 直接 fetch 页面 URL 返回 HTML 不含 JSON 用量字段，
+        # 读 DOM 只能拿到上次页面加载时的旧数据。
+        # 解决：用 CDP Page.reload 重新加载页面（忽略缓存），
+        # 等加载完 + SPA 水合后读 DOM，拿到最新数据。
+        try:
+            harness.page_reload(ws_url, ignore_cache=True, wait_load=True, settle=2)
+        except CDPError as e:
+            return self._translate_err(data, e)
+
+        # 读 DOM 中的用量百分比
         js = (
             "(async()=>{"
-            "const out={source:'none',url:'',status:0,body:'',dom:null,errors:[]};"
-            "const hasUsage=t=>/rollingUsage|weeklyUsage|monthlyUsage|usagePercent/i.test(t||'');"
-            "const sameOrigin=u=>{try{return new URL(u,location.href).origin===location.origin}catch(e){return false}};"
-            "const addTs=u=>{const x=new URL(u,location.href);x.searchParams.set('_tv',Date.now());return x.href;};"
-            "const readDom=()=>{"
             "const texts=document.body.innerText||'';"
             "const results={};"
             "const rollingMatch=texts.match(/5[Hh].*?(\\d+(?:\\.\\d+)?)\\s*%/);"
@@ -78,36 +84,18 @@ class OpenCodeProvider(BaseProvider):
             "const monthlyMatch=texts.match(/[Mm]onthly.*?(\\d+(?:\\.\\d+)?)\\s*%|月.*?(\\d+(?:\\.\\d+)?)\\s*%/);"
             "if(monthlyMatch)results.monthly=parseFloat(monthlyMatch[1]||monthlyMatch[2]);"
             "results.allPcts=[...texts.matchAll(/(\\d+(?:\\.\\d)?)\\s*%/g)].map(m=>parseFloat(m[1]));"
-            "return results;"
-            "};"
-            "let urls=[];"
-            "try{urls=performance.getEntriesByType('resource').map(e=>e.name)"
-            ".filter(sameOrigin).filter(u=>/(usage|__server|workspace|api|go|trpc|rpc)/i.test(u));}catch(e){}"
-            f"urls.unshift(new URL('/workspace/'+{json.dumps(wsid)}+'/go',location.origin).href);"
-            "urls.unshift(location.href);"
-            "urls=[...new Set(urls)];"
-            "for(const u of urls){"
-            "try{"
-            "const r=await fetch(addTs(u),{credentials:'include',cache:'no-store',"
-            "headers:{'Accept':'application/json, text/plain, */*','Cache-Control':'no-cache','Pragma':'no-cache'}});"
-            "const t=await r.text();"
-            "if(hasUsage(t)){out.source='network';out.url=u;out.status=r.status;out.body=t.slice(0,200000);out.dom=readDom();return JSON.stringify(out);}"
-            "out.errors.push({url:u,status:r.status,len:t.length});"
-            "}catch(e){out.errors.push({url:u,error:String(e).slice(0,120)});}"
-            "}"
-            "out.source='dom';out.dom=readDom();return JSON.stringify(out);"
+            "return JSON.stringify(results);"
             "})()"
         )
 
         try:
-            result = harness.evaluate(
-                page["webSocketDebuggerUrl"], js, await_promise=True)
+            result = harness.evaluate(ws_url, js, await_promise=True)
         except CDPError as e:
             return self._translate_err(data, e)
 
         text = result.get("value") or ""
         if not text.strip():
-            return self._err(data, "API 返回空")
+            return self._err(data, "DOM 读取为空")
         return self._parse_response(text, data)
 
     def _translate_err(self, data: UsageData, e: CDPError) -> UsageData:
