@@ -18,4 +18,4 @@ def log(msg: str):
             f.write(line + "\n")
     except OSError:
         pass
-    print(line, flush=True)
+    # print(line, flush=True)
