@@ -177,7 +177,7 @@ class Api:
         return window_helper.move_window(self.window, x, y)
 
     def move_window_to_top(self, width: int = 0, height: int = 0) -> dict:
-        result = window_helper.move_to_top(self.window, self.cfg, height)
+        result = window_helper.move_to_top(self.window, self.cfg, width, height)
         if result.get("ok") and result.get("width"):
             self._top_mode_width = result["width"]
         return result

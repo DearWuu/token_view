@@ -335,7 +335,16 @@ async function moveToTop() {
         applyPanelWidth();
         document.body.classList.add('top-mode');
         const size = measurePanelSize();
-        const result = await window.pywebview.api.move_window_to_top(0, size.height);
+
+        // 根据供应商数量自动计算顶部条宽度
+        const providerCount = Object.keys(state.cards).length || 1;
+        const perProvider = state.compact ? 280 : 1200;
+        const padding = 60;
+        const autoWidth = providerCount * perProvider + padding;
+        const maxScreenW = window.screen.availWidth || 2000;
+        const targetWidth = Math.min(Math.max(autoWidth, PANEL_WIDTH), maxScreenW);
+
+        const result = await window.pywebview.api.move_window_to_top(targetWidth, size.height);
         const ok = typeof result === 'object' ? result.ok : result;
         elements.btnTop.classList.toggle('active', ok);
         setTimeout(() => elements.btnTop.classList.remove('active'), 700);

@@ -313,8 +313,12 @@ def _save_pre_dock_geometry(window, cfg: dict) -> None:
             pass
 
 
-def move_to_top(window, cfg: dict, height: int = 0) -> dict:
-    """把窗口放大并移到当前屏幕顶部。返回 {"ok", "width", "height", "mode"}。"""
+def move_to_top(window, cfg: dict, width: int = 0, height: int = 0) -> dict:
+    """把窗口放大并移到当前屏幕顶部。返回 {"ok", "width", "height", "mode"}。
+
+    width > 0 时用 JS 传入的宽度（根据供应商数量自适应），
+    width = 0 时回退到屏幕宽度 80%。
+    """
     if window is None:
         return {"ok": False}
 
@@ -322,17 +326,18 @@ def move_to_top(window, cfg: dict, height: int = 0) -> dict:
 
     system = platform.system()
     if system == "Darwin":
-        return _move_to_top_macos(window, cfg, height)
+        return _move_to_top_macos(window, cfg, height, width)
     if system == "Windows":
-        r = _move_to_top_windows(window, cfg, height)
+        r = _move_to_top_windows(window, cfg, height, width)
         if r.get("ok"):
             return r
 
     # 兜底（Linux 等）
-    return _move_to_top_pywebview(window, cfg, height)
+    return _move_to_top_pywebview(window, cfg, height, width)
 
 
-def _move_to_top_macos(window, cfg: dict, height: int) -> dict:
+def _move_to_top_macos(window, cfg: dict, height: int,
+                       requested_width: int = 0) -> dict:
     try:
         def work():
             native = getattr(window, "native", None)
@@ -350,7 +355,10 @@ def _move_to_top_macos(window, cfg: dict, height: int) -> dict:
             sw = max(320, int(visible.size.width))
             sh = max(120, int(visible.size.height))
             top_margin = 36
-            target_w = max(320, int(sw * 0.8))
+            if requested_width and requested_width > 0:
+                target_w = max(320, min(int(requested_width), sw))
+            else:
+                target_w = max(320, int(sw * 0.8))
             frame = native.frame()
             current_h = int(frame.size.height or 0)
             target_h = max(80, min(int(height or current_h),
@@ -376,7 +384,8 @@ def _move_to_top_macos(window, cfg: dict, height: int) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _move_to_top_windows(window, cfg: dict, height: int) -> dict:
+def _move_to_top_windows(window, cfg: dict, height: int,
+                         requested_width: int = 0) -> dict:
     try:
         user32 = ctypes.windll.user32
     except OSError:
@@ -418,7 +427,12 @@ def _move_to_top_windows(window, cfg: dict, height: int) -> dict:
     work = info.rcWork
     sw = max(320, int(work.right - work.left))
     sh = max(120, int(work.bottom - work.top))
-    target_w = max(320, int(sw * 0.8))
+
+    # 宽度：JS 传入 > 0 时用 JS 的值（CSS 逻辑像素），否则回退到屏幕 80%
+    if requested_width and requested_width > 0:
+        target_w = max(320, min(int(requested_width * scale), sw))
+    else:
+        target_w = max(320, int(sw * 0.8))
     target_h = max(80, min(int((height or 0) * scale), sh))
     target_x = int(work.left + (sw - target_w) / 2)
     target_y = int(work.top)
@@ -441,7 +455,8 @@ def _move_to_top_windows(window, cfg: dict, height: int) -> dict:
     return {"ok": True, "width": css_w, "height": css_h, "mode": "top"}
 
 
-def _move_to_top_pywebview(window, cfg: dict, height: int) -> dict:
+def _move_to_top_pywebview(window, cfg: dict, height: int,
+                           requested_width: int = 0) -> dict:
     try:
         import webview
     except ImportError:
@@ -467,8 +482,12 @@ def _move_to_top_pywebview(window, cfg: dict, height: int) -> dict:
             screen = screens[0]
     if screen is not None:
         x, y, w, h = screen_helper.top_bar_geometry(screen, h)
+        if requested_width and requested_width > 0:
+            sw = screen_helper.screen_value(screen, "width")
+            w = min(int(requested_width), sw)
+            x = screen_helper.screen_value(screen, "x") + max(0, (sw - w) // 2)
     else:
-        w = max(1200, int(w))
+        w = max(1200, int(requested_width or w))
         x = 40
         y = 36
     window.resize(w, h)
