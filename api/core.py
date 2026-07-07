@@ -215,7 +215,41 @@ class Api:
         return settings_api.close_settings_window()
 
     def quit_app(self) -> bool:
-        """保存配置 + 销毁所有窗口 + 退出。"""
+        """关闭按钮：隐藏窗口到托盘，不退出程序（QQ/微信风格）。
+        如果托盘没启动则直接退出（否则用户无法恢复窗口）。"""
+        # 检查托盘是否可用
+        tray_ok = False
+        try:
+            import tray as _tray_mod
+            tray_inst = getattr(_tray_mod, '_tray_instance', None)
+            tray_ok = tray_inst is not None and tray_inst.running
+        except Exception:
+            tray_ok = False
+
+        if not tray_ok:
+            log("托盘未启动，直接退出")
+            return self.force_quit()
+
+        if self.window is not None:
+            try:
+                if platform.system() == "Windows":
+                    import ctypes
+                    from . import screen as screen_helper
+                    hwnd = screen_helper.window_hwnd(self.window)
+                    if hwnd:
+                        ctypes.windll.user32.ShowWindowAsync(hwnd, 0)  # SW_HIDE
+                        log("窗口已隐藏到托盘")
+                        return True
+                else:
+                    self.window.hide()
+                    log("窗口已隐藏到托盘")
+                    return True
+            except (OSError, RuntimeError) as e:
+                log(f"隐藏窗口失败: {e}")
+        return True
+
+    def force_quit(self) -> bool:
+        """真正退出程序（从托盘菜单调用）。"""
         try:
             config.save(self.cfg)
         except OSError as e:
@@ -227,6 +261,14 @@ class Api:
             except (OSError, RuntimeError):
                 pass
         settings_api.close_settings_window()
+
+        # 停止托盘图标
+        try:
+            import tray as _tray_mod
+            if hasattr(_tray_mod, '_tray_instance'):
+                _tray_mod._tray_instance.stop()
+        except Exception:
+            pass
 
         # Windows: destroy() 走 winforms.Application.Exit() 自动退
         # macOS: Cocoa 事件循环不会自动退，必须强 terminate

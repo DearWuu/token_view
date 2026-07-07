@@ -158,6 +158,17 @@ def main():
     
     # 保存窗口引用到 API
     api.window = window
+
+    # 启动系统托盘图标（QQ/微信风格：关闭按钮隐藏到托盘）
+    _tray_icon = None
+    try:
+        import tray as tray_mod
+        _tray_icon = tray_mod.TrayIcon(api)
+        _tray_icon.start()
+        tray_mod._tray_instance = _tray_icon
+    except Exception as e:
+        log(f"托盘启动失败: {e}")
+        _tray_icon = None
     
     # Windows 上 pywebview 的 get_functions 会递归遍历 api.window.native
     #（.NET WinForms Form），导致 COM 无限递归崩溃。标记不可遍历以避开。
@@ -196,6 +207,35 @@ def main():
                 log(f"设置初始透明度失败: {e}")
     
     window.events.loaded += on_loaded
+
+    # Windows: 把窗口从任务栏隐藏（WS_EX_TOOLWINDOW），只显示托盘图标
+    def on_shown():
+        if is_windows:
+            try:
+                import ctypes
+                from api.screen import window_hwnd
+                hwnd = window_hwnd(window)
+                if hwnd:
+                    GWL_EXSTYLE = -20
+                    WS_EX_TOOLWINDOW = 0x00000080
+                    WS_EX_APPWINDOW = 0x00040000
+                    user32 = ctypes.windll.user32
+                    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+                    # 加 TOOLWINDOW，同时移除 APPWINDOW（两者互斥）
+                    new_style = (ex_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+                    # 刷新窗口框架让样式生效
+                    SWP_FRAMECHANGED = 0x0020
+                    SWP_NOMOVE = 0x0002
+                    SWP_NOSIZE = 0x0001
+                    SWP_NOZORDER = 0x0004
+                    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
+                    log("窗口已设为 TOOLWINDOW（不在任务栏显示）")
+            except Exception as e:
+                log(f"设置 TOOLWINDOW 失败: {e}")
+
+    window.events.shown += on_shown
 
     webview.start(debug=False)
 
