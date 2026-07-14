@@ -2,7 +2,19 @@
     --panel-width: 420px;
     /* 假透明度：背景 alpha 由 --opacity-primary 控制（前端 applyWindowOpacity 改） */
     --opacity-primary: 0.96;
-    --bg-primary: rgba(20, 20, 24, var(--opacity-primary));
+
+    /* ── 结构（不随主题变） ── */
+    --radius-container: 18px;
+    --radius-card: 13px;
+    --radius-badge: 12px;
+    --radius-bar: 3px;
+    --radius-btn: 7px;
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.3s ease;
+    --transition-smooth: 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+    /* ── 暗色主题（默认） ── */
+    --bg-primary: rgba(15, 17, 23, var(--opacity-primary));
     --bg-card: rgba(255, 255, 255, 0.045);
     --bg-card-hover: rgba(255, 255, 255, 0.08);
     --bg-bar: rgba(255, 255, 255, 0.08);
@@ -18,14 +30,96 @@
     --color-blue: #3b82f6;
     --color-purple: #a855f7;
     --color-orange: #ff6900;
-    --radius-container: 18px;
-    --radius-card: 13px;
-    --radius-badge: 12px;
-    --radius-bar: 3px;
-    --radius-btn: 7px;
-    --transition-fast: 0.15s ease;
-    --transition-normal: 0.3s ease;
-    --transition-smooth: 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+    /* 玻璃/边框（暗色） */
+    --border-container: rgba(255, 255, 255, 0.06);
+    --border-card: rgba(255, 255, 255, 0.04);
+    --bg-usage-compact: rgba(255, 255, 255, 0.06);
+    --spinner-track: rgba(255, 255, 255, 0.1);
+    --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+
+    /* 极光（暗色） */
+    --aurora-cool: #0b2447;
+    --aurora-glow: #0a3622;
+    --aurora-warm: #143d6f;
+    --aurora-opacity: 0.35;
+
+    /* 进度条渐变 */
+    --progress-green-start: #3fb950;
+    --progress-green-end: #6ecf80;
+    --progress-yellow-start: #f0a020;
+    --progress-yellow-end: #f5c060;
+    --progress-red-start: #f85149;
+    --progress-red-end: #f59280;
+}
+
+/* ── 亮色主题 ── */
+body.theme-light {
+    --bg-primary: rgba(237, 243, 248, var(--opacity-primary));
+    --bg-card: rgba(255, 255, 255, 0.55);
+    --bg-card-hover: rgba(255, 255, 255, 0.75);
+    --bg-bar: rgba(0, 0, 0, 0.06);
+    --bg-btn: #e8ecf1;
+    --bg-btn-hover: #d0d7e0;
+    --text-primary: #1a1a2e;
+    --text-secondary: #4a4a5a;
+    --text-dim: #7a7a8a;
+    --text-label: #6a6a78;
+    --color-green: #2d8a3e;
+    --color-yellow: #cc7a00;
+    --color-red: #d93636;
+    --color-blue: #2563eb;
+    --color-purple: #7c3aed;
+    --color-orange: #ea580c;
+
+    --border-container: rgba(0, 0, 0, 0.08);
+    --border-card: rgba(0, 0, 0, 0.05);
+    --bg-usage-compact: rgba(0, 0, 0, 0.04);
+    --spinner-track: rgba(0, 0, 0, 0.1);
+    --scrollbar-thumb: rgba(0, 0, 0, 0.08);
+
+    --aurora-cool: #b9d5ee;
+    --aurora-glow: #dff4e5;
+    --aurora-warm: #c7ddf2;
+    --aurora-opacity: 0.42;
+
+    --progress-green-start: #2d8a3e;
+    --progress-green-end: #4ebf60;
+    --progress-yellow-start: #cc7a00;
+    --progress-yellow-end: #e8a830;
+    --progress-red-start: #d93636;
+    --progress-red-end: #f06050;
+}
+
+/* ── 极光等级：告警（10-49%） ── */
+.quota-tier--caution {
+    --aurora-cool: #1e2a4a;
+    --aurora-glow: #3d2a0a;
+    --aurora-warm: #5c4020;
+    --aurora-opacity: 0.42;
+}
+
+/* ── 极光等级：紧急（<10%） ── */
+.quota-tier--critical {
+    --aurora-cool: #2a1e2a;
+    --aurora-glow: #4a1508;
+    --aurora-warm: #6b2010;
+    --aurora-opacity: 0.5;
+}
+
+/* 亮色主题下对应的告警/紧急极光色 */
+body.theme-light .quota-tier--caution {
+    --aurora-cool: #c4cee0;
+    --aurora-glow: #fff0ba;
+    --aurora-warm: #f4c979;
+    --aurora-opacity: 0.5;
+}
+
+body.theme-light .quota-tier--critical {
+    --aurora-cool: #c4cee0;
+    --aurora-glow: #ffd8a8;
+    --aurora-warm: #f07260;
+    --aurora-opacity: 0.56;
 }
 
 * {
@@ -58,10 +152,12 @@ body.no-transparent {
 }
 
 .container {
+    position: relative;
+    isolation: isolate;
     background: var(--bg-primary);
     border-radius: var(--radius-container);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--border-container);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
     overflow: hidden;
     transition: border-color var(--transition-fast);
     width: min(var(--panel-width), 100vw);
@@ -220,7 +316,7 @@ body.top-mode:not(.compact) .usage-note {
 }
 
 .cards-container::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--scrollbar-thumb);
     border-radius: 2px;
 }
 
@@ -228,7 +324,7 @@ body.top-mode:not(.compact) .usage-note {
 .card {
     background: var(--bg-card);
     border-radius: var(--radius-card);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-card);
     padding: 13px;
     transition: all var(--transition-fast);
     animation: fadeIn 0.3s ease forwards;
@@ -346,11 +442,11 @@ body.top-mode:not(.compact) .usage-note {
     height: 100%;
     border-radius: var(--radius-bar);
     transition: width var(--transition-smooth);
-    background: var(--color-green);
+    background: linear-gradient(90deg, var(--progress-green-start), var(--progress-green-end));
 }
 
-.progress-fill.warning { background: var(--color-yellow); }
-.progress-fill.danger { background: var(--color-red); }
+.progress-fill.warning { background: linear-gradient(90deg, var(--progress-yellow-start), var(--progress-yellow-end)); }
+.progress-fill.danger { background: linear-gradient(90deg, var(--progress-red-start), var(--progress-red-end)); }
 
 .usage-percent {
     font-size: 12px;
@@ -405,7 +501,7 @@ body.top-mode:not(.compact) .usage-note {
 .loading-spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid rgba(255, 255, 255, 0.1);
+    border: 2px solid var(--spinner-track);
     border-top-color: var(--color-blue);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -567,7 +663,7 @@ body.compact .usage-item {
     min-width: 0;
     padding: 2px 5px;
     border-radius: 7px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-usage-compact);
 }
 
 body.compact .usage-row {
@@ -806,4 +902,54 @@ body.dock-mode .loading {
     .usage-percent {
         grid-area: pct;
     }
+}
+
+/* ================================================================
+   极光背景层（Glassmorphism + Aurora）
+   ================================================================ */
+
+.aurora {
+    position: absolute;
+    inset: -20%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(ellipse 120% 80% at 15% 20%, var(--aurora-cool) 0%, transparent 58%),
+        radial-gradient(ellipse 90% 70% at 70% 30%, var(--aurora-glow) 0%, transparent 52%),
+        radial-gradient(ellipse 80% 80% at 60% 70%, var(--aurora-warm) 0%, transparent 55%),
+        linear-gradient(145deg,
+            rgba(20, 25, 38, 0.92) 0%,
+            rgba(15, 17, 23, 0.85) 40%,
+            rgba(20, 25, 38, 0.92) 100%
+        );
+    opacity: var(--aurora-opacity, 0.35);
+    animation: aurora-drift 18s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift {
+    to { transform: translate3d(5%, 4%, 0) scale(1.12) rotate(2deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .aurora { animation: none; }
+}
+
+body.no-transparent .aurora {
+    opacity: calc(var(--aurora-opacity, 0.35) * 0.6);
+}
+
+body.theme-light .aurora {
+    background:
+        radial-gradient(ellipse 120% 80% at 15% 20%, var(--aurora-cool) 0%, transparent 58%),
+        radial-gradient(ellipse 90% 70% at 70% 30%, var(--aurora-glow) 0%, transparent 52%),
+        radial-gradient(ellipse 80% 80% at 60% 70%, var(--aurora-warm) 0%, transparent 55%),
+        linear-gradient(145deg,
+            rgba(237, 243, 248, 0.92) 0%,
+            rgba(228, 236, 244, 0.85) 40%,
+            rgba(237, 243, 248, 0.92) 100%
+        );
+}
+
+body.dock-mode .aurora {
+    opacity: calc(var(--aurora-opacity, 0.35) * 0.5);
 }

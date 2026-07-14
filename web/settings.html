@@ -350,6 +350,13 @@
             <input type="range" id="opacity" min="30" max="100" value="92">
             <span id="opacity-value">92%</span>
         </div>
+        <div class="form-group">
+            <label>主题</label>
+            <select id="theme-select">
+                <option value="dark">暗色（Dark）</option>
+                <option value="light">亮色（Light）</option>
+            </select>
+        </div>
     </div>
 
     <div class="actions">
@@ -368,6 +375,7 @@
                 document.getElementById('refresh-interval').value = config.refresh_interval || 60;
                 document.getElementById('opacity').value = (config.opacity || 0.92) * 100;
                 document.getElementById('opacity-value').textContent = Math.round((config.opacity || 0.92) * 100) + '%';
+                document.getElementById('theme-select').value = config.theme || 'dark';
             }
         }
 
@@ -553,7 +561,8 @@
                 const updates = {
                     providers: config.providers || [],
                     refresh_interval: parseInt(document.getElementById('refresh-interval').value) || 60,
-                    opacity: parseInt(document.getElementById('opacity').value) / 100 || 0.92
+                    opacity: parseInt(document.getElementById('opacity').value) / 100 || 0.92,
+                    theme: document.getElementById('theme-select').value || 'dark'
                 };
                 
                 await window.pywebview.api.save_config(updates);
@@ -579,6 +588,13 @@
             // 实时应用透明度
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.set_opacity(parseInt(this.value) / 100);
+            }
+        });
+
+        // 主题切换实时预览
+        document.getElementById('theme-select').addEventListener('change', function() {
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.set_theme(this.value);
             }
         });
 

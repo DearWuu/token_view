@@ -23,6 +23,7 @@ DEFAULT: dict[str, Any] = {
     "refresh_interval": 15,   # 秒
     "opacity": 0.92,          # 悬浮窗透明度 0~1
     "always_on_top": True,
+    "theme": "dark",          # dark / light
     "geometry": None,         # [x, y, w, h]，记忆窗口位置
     "compact": False,         # 紧凑模式
     "dock": False,            # 顶部条模式

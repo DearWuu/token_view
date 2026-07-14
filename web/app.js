@@ -11,7 +11,11 @@ const state = {
     onTop: true,
     refreshInterval: 60000,
     timer: null,
-    opacity: 0.92
+    opacity: 0.92,
+    theme: 'dark',
+    fitToken: 0,
+    dockMode: false,
+    dockHidden: false
 };
 
 const PANEL_WIDTH = 420;
@@ -44,6 +48,34 @@ function shortUsageLabel(label) {
     if (text.includes('month') || text.includes('月')) return '月';
     if (text.includes('mcp')) return 'MCP';
     return String(label || '').trim().slice(0, 3) || '用量';
+}
+
+/* 主题切换 —— 供 pywebview evaluate_js 调用 */
+function setTheme(theme) {
+    theme = theme === 'light' ? 'light' : 'dark';
+    state.theme = theme;
+    document.body.classList.remove('theme-dark', 'theme-light');
+    document.body.classList.add('theme-' + theme);
+}
+
+/* 根据所有 provider 的最低配额更新极光等级 */
+function updateAuroraTier(providers) {
+    const container = document.querySelector('.container');
+    if (!container) return;
+    container.classList.remove('quota-tier--healthy', 'quota-tier--caution', 'quota-tier--critical');
+
+    var minPercent = 100;
+    (providers || []).forEach(function(p) {
+        (p.items || []).forEach(function(item) {
+            var pct = Number(item.percent);
+            if (!isNaN(pct) && pct < minPercent) minPercent = pct;
+        });
+    });
+
+    if (minPercent >= 100) return;
+    if (minPercent >= 50) container.classList.add('quota-tier--healthy');
+    else if (minPercent >= 10) container.classList.add('quota-tier--caution');
+    else container.classList.add('quota-tier--critical');
 }
 
 function normalizedCompactItems(items) {
@@ -89,7 +121,7 @@ function nativeWidthForCss(cssWidth) {
     if (state.topMode) {
         return 0;
     }
-    return Math.ceil(cssWidth);
+    return Math.round(cssWidth);
 }
 
 function measurePanelSize() {
@@ -115,10 +147,8 @@ function measurePanelSize() {
 
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
-    const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
-    const containerHeight = Math.ceil(container.scrollHeight || 0);
-    const height = Math.ceil(Math.max(summedHeight, containerHeight) + WINDOW_HEIGHT_PADDING);
-    const measuredWidth = Math.ceil(container.getBoundingClientRect().width || cssWidth);
+    const height = Math.ceil(titleHeight + cardsHeight + emptyHeight + loadingHeight + WINDOW_HEIGHT_PADDING);
+    const measuredWidth = Math.round(container.getBoundingClientRect().width || cssWidth);
     return {
         width: nativeWidthForCss(measuredWidth),
         height: Math.max(80, height)
@@ -235,6 +265,7 @@ function renderCards(providers) {
     providers.forEach(p => {
         state.cards[p.id] = p;
     });
+    updateAuroraTier(providers);
     scheduleWindowFit();
 }
 
@@ -243,6 +274,7 @@ function applyProviderUpdates(providers) {
         elements.container.innerHTML = '';
         state.cards = {};
         elements.emptyTip.style.display = 'block';
+        updateAuroraTier([]);
         scheduleWindowFit();
         return;
     }
@@ -261,6 +293,7 @@ function applyProviderUpdates(providers) {
             delete state.cards[id];
         }
     });
+    updateAuroraTier(providers);
 }
 
 // 更新单个卡片
@@ -387,7 +420,9 @@ async function toggleDock() {
         await window.pywebview.api.restore_window();
         state.topMode = false;
         state.topWidth = null;
+        state.manualWidth = null;
         document.body.classList.remove('top-mode');
+        await window.pywebview.api.set_top_mode(false);
         applyPanelWidth();
         scheduleWindowFit(80);
     }
@@ -624,6 +659,9 @@ async function init() {
             applyWindowOpacity(state.opacity);
             await window.pywebview.api.set_top_mode(false);
 
+            // 主题
+            setTheme(cfg.theme || 'dark');
+
             // 设置模式
             document.body.classList.toggle('compact', state.compact);
             document.body.classList.remove('dock-mode');
@@ -640,9 +678,8 @@ async function init() {
         }
     }
 
-    // 首次刷新
-    await refresh();
-    scheduleWindowFit(80);
+    // 首次刷新（异步：窗口立即可见，数据到后 renderCards 内部自动 fit）
+    refresh();
 }
 
 // 等待 pywebview 就绪
