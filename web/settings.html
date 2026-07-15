@@ -224,6 +224,7 @@
         <div class="section-title">账号管理</div>
         <div class="add-buttons">
             <button class="btn btn-small" onclick="addProvider('zhipu')">＋ 智谱</button>
+            <button class="btn btn-small" onclick="addProvider('kimi')">＋ Kimi</button>
             <button class="btn btn-small" onclick="addProvider('opencode')">＋ OpenCode</button>
             <button class="btn btn-small" onclick="addProvider('mimo')">＋ MiMo</button>
             <button class="btn btn-small" onclick="addProvider('volcengine')">＋ 火山</button>
@@ -275,6 +276,23 @@
                 <input type="number" id="edit-cdp-port" value="9222" min="1024" max="65535">
             </div>
             <button class="btn btn-small" onclick="launchCdp('zhipu')">🚀 启动调试 Chrome</button>
+        </div>
+
+        <!-- Kimi 特有字段 -->
+        <div id="kimi-fields" class="hidden">
+            <div class="form-group">
+                <label>Cookie</label>
+                <input type="text" id="edit-kimi-cookie" placeholder="CDP 模式下可留空">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-kimi-cdp-enabled" checked>
+                <label for="edit-kimi-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-kimi-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <button class="btn btn-small" onclick="launchCdp('kimi')">🚀 启动调试 Chrome</button>
         </div>
 
         <!-- OpenCode 特有字段 -->
@@ -416,6 +434,7 @@
 
             // 隐藏所有特有字段
             document.getElementById('zhipu-fields').classList.add('hidden');
+            document.getElementById('kimi-fields').classList.add('hidden');
             document.getElementById('opencode-fields').classList.add('hidden');
             document.getElementById('mimo-fields').classList.add('hidden');
             document.getElementById('volcengine-fields').classList.add('hidden');
@@ -429,6 +448,11 @@
                 document.getElementById('edit-customer-id').value = provider.customer_id || '';
                 document.getElementById('edit-cdp-enabled').checked = provider.cdp_enabled !== false;
                 document.getElementById('edit-cdp-port').value = provider.cdp_port || 9222;
+            } else if (provider.type === 'kimi') {
+                document.getElementById('kimi-fields').classList.remove('hidden');
+                document.getElementById('edit-kimi-cookie').value = provider.cookie || '';
+                document.getElementById('edit-kimi-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-kimi-cdp-port').value = provider.cdp_port || 9222;
             } else if (provider.type === 'opencode') {
                 document.getElementById('opencode-fields').classList.remove('hidden');
                 document.getElementById('edit-workspace').value = provider.workspace_id || '';
@@ -495,6 +519,11 @@
                 provider.cdp_enabled = document.getElementById('edit-cdp-enabled').checked;
                 provider.cdp_port = parseInt(document.getElementById('edit-cdp-port').value);
                 provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            } else if (provider.type === 'kimi') {
+                provider.cookie = document.getElementById('edit-kimi-cookie').value;
+                provider.cdp_enabled = document.getElementById('edit-kimi-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-kimi-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
             } else if (provider.type === 'opencode') {
                 provider.workspace_id = document.getElementById('edit-workspace').value;
                 provider.cookie = document.getElementById('edit-cookie-o').value;
@@ -531,6 +560,9 @@
             if (type === 'zhipu') {
                 port = parseInt(document.getElementById('edit-cdp-port').value);
                 url = 'https://bigmodel.cn/coding-plan/team/usage-stats';
+            } else if (type === 'kimi') {
+                port = parseInt(document.getElementById('edit-kimi-cdp-port').value);
+                url = 'https://www.kimi.com/code/console?from=kfc_overview_topbar';
             } else if (type === 'opencode') {
                 port = parseInt(document.getElementById('edit-oc-cdp-port').value);
                 url = 'https://opencode.ai';

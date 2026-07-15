@@ -147,6 +147,47 @@ class CDPHarness:
             raise CDPEvalError("CDP 返回 undefined")
         return result
 
+    def get_cookies(self, ws_url: str, timeout: Optional[int] = None) -> list[dict]:
+        """通过 CDP Network.getAllCookies 获取所有 cookie（含 HttpOnly）。
+
+        返回 cookie 对象列表，每个对象包含 name/value/domain/path/secure 等字段。
+        """
+        if not HAS_WS:
+            raise CDPNotConnected("缺少 websocket-client 依赖")
+
+        t = timeout or self.DEFAULT_TIMEOUT
+        try:
+            ws = ws_connect(ws_url, timeout=t, origin=self.origin)
+        except Exception as e:  # noqa: BLE001
+            raise CDPNotConnected(f"WebSocket 连接失败: {e}") from e
+
+        try:
+            # 启用 Network 域
+            ws.send(json.dumps({"id": 1, "method": "Network.enable"}))
+            self._recv_until_id(ws, 1, timeout=5)
+
+            # 获取所有 cookie
+            ws.send(json.dumps({"id": 2, "method": "Network.getAllCookies"}))
+            raw = self._recv_until_id(ws, 2, timeout=5)
+        except CDPError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise CDPNotConnected(f"Network.getAllCookies 通讯失败: {e}") from e
+        finally:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            resp = json.loads(raw)
+        except ValueError as e:
+            raise CDPEvalError(f"CDP 响应非 JSON: {e}") from e
+
+        if resp.get("error"):
+            raise CDPEvalError(f"CDP 错误: {resp['error']}")
+        return resp.get("result", {}).get("cookies", [])
+
     def page_reload(self, ws_url: str, ignore_cache: bool = True,
                     wait_load: bool = True, settle: float = 1.0,
                     timeout: Optional[int] = None) -> None:

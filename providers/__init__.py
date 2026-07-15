@@ -8,6 +8,7 @@
 
 支持的 type：
   - "zhipu"       智谱 GLM Coding Plan（CDP/cookie/API key 三模式）
+  - "kimi"        Kimi 订阅额度（CDP 模式）
   - "opencode"    OpenCode Go（CDP 模式）
   - "mimo"        小米 MiMo Token Plan（CDP 模式）
   - "volcengine"  火山引擎 Ark Agent Plan（CDP 模式）
@@ -20,6 +21,7 @@ from .base import (
     UsageItem,
     fmt_tokens,
 )
+from .kimi import KimiProvider
 from .opencode import OpenCodeProvider
 from .zhipu import ZhipuProvider
 from .mimo import MimoProvider
@@ -31,6 +33,8 @@ def build(cfg: dict) -> BaseProvider:
     ptype = cfg.get("type")
     if ptype == "zhipu":
         return ZhipuProvider(cfg)
+    if ptype == "kimi":
+        return KimiProvider(cfg)
     if ptype == "opencode":
         return OpenCodeProvider(cfg)
     if ptype == "mimo":
@@ -46,6 +50,7 @@ __all__ = [
     "UsageItem",
     "fmt_tokens",
     "ZhipuProvider",
+    "KimiProvider",
     "OpenCodeProvider",
     "MimoProvider",
     "VolcEngineProvider",

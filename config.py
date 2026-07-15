@@ -106,6 +106,14 @@ def new_provider(ptype: str) -> dict:
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",
         })
+    elif ptype == "kimi":
+        base.update({
+            "cookie": "",
+            "name": "Kimi",
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
     elif ptype == "opencode":
         base.update({
             "cookie": "",

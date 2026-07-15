@@ -25,6 +25,7 @@ const WINDOW_HEIGHT_PADDING = 0;
 // 颜色配置
 const BADGE_COLORS = {
     zhipu: { bg: '#3b82f6', text: '智' },
+    kimi: { bg: '#10b981', text: 'Ki' },
     opencode: { bg: '#a855f7', text: 'OC' },
     mimo: { bg: '#ff6900', text: 'Mi' },
     volcengine: { bg: '#e11d48', text: '火' }
@@ -44,6 +45,7 @@ function formatReset(note) {
 function shortUsageLabel(label) {
     const text = String(label || '').trim().toLowerCase();
     if (text.includes('5') || text.includes('rolling')) return '5h';
+    if (text.includes('7d') || text.includes('7天')) return '周';
     if (text.includes('week') || text.includes('周')) return '周';
     if (text.includes('month') || text.includes('月')) return '月';
     if (text.includes('mcp')) return 'MCP';
