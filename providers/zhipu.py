@@ -1,8 +1,10 @@
 """智谱 GLM Coding Plan Provider。
 
-三种取数方式（按优先级）：
-  1. CDP 模式（默认，唯一能拿到团队版用量的方案）
-  2. Cookie + usage_url（旧路径，已被反爬限制）
+取数方式（按优先级）：
+  1. 凭证直连（推荐）：auth_token + org_id + project_id 已提取时，
+     纯 HTTP 请求 sub-account-rank，不开浏览器（实测无反爬，
+     缺 Bigmodel-* header 才会返回空 data）
+  2. CDP 模式：连接已登录调试 Chrome，在页面上下文 fetch（凭证直连失败时兜底）
   3. API Key（个人版，/api/monitor/usage/quota/limit）
 
 智谱 Authorization 不加 Bearer 前缀。
@@ -14,6 +16,8 @@ import time
 from datetime import datetime, timedelta
 
 import requests
+
+from logger import log
 
 from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA, fmt_tokens
 from .cdp import CDPHarness, CDPError
@@ -27,12 +31,23 @@ class ZhipuProvider(BaseProvider):
 
     TEAM_RANK_URL = "https://bigmodel.cn/api/monitor/usage/sub-account-rank"
     CDP_EVAL_TIMEOUT = 30
+    SITE_NAME = "bigmodel.cn"
 
     def fetch(self) -> UsageData:
         name = self.cfg.get("name") or "智谱 GLM"
         data = UsageData(provider_name=name, fetched_at=time.time())
 
-        # 优先 CDP：连接用户已登录的调试 Chrome，在页面上下文 fetch
+        # 优先凭证直连：已提取 JWT + org/project 时纯 HTTP，不开浏览器
+        if self.has_direct_credentials(self.cfg):
+            result = self._fetch_team_http(data)
+            if result.status != "error":
+                return result
+            log(f"智谱凭证直连失败（{result.error}），尝试 CDP 兜底")
+            if not self.cfg.get("cdp_enabled", True):
+                return result
+            return self._fallback_cdp(data, result.error, self._fetch_team_cdp)
+
+        # CDP 兜底：连接用户已登录的调试 Chrome，在页面上下文 fetch
         if self.cfg.get("cdp_enabled", True):
             return self._fetch_team_cdp(data)
 
@@ -73,7 +88,59 @@ class ZhipuProvider(BaseProvider):
             }
             return self._get(base + endpoint, headers, data, None, self._parse_limits)
 
-        return self._err(data, "未配置：请用 API Key，或在设置里登录抓取凭证")
+        return self._err(data, "未配置：请在设置里点「提取凭证」，或填 API Key")
+
+    # ---- 凭证直连模式 ----
+    @staticmethod
+    def has_direct_credentials(cfg: dict) -> bool:
+        return all((cfg.get(k) or "").strip()
+                   for k in ("auth_token", "org_id", "project_id"))
+
+    @classmethod
+    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
+        harness = CDPHarness(
+            port=port, page_keyword="bigmodel.cn", cdp_url=cdp_url,
+            eval_timeout=cls.CDP_EVAL_TIMEOUT)
+        page = harness.find_page()
+        js = (
+            "(()=>{"
+            "var m=/bigmodel_token_production=([^;]+)/.exec(document.cookie);"
+            "return JSON.stringify({"
+            "token:m?m[1]:'',"
+            "org:localStorage.getItem('Bigmodel-Organization')||'',"
+            "proj:localStorage.getItem('Bigmodel-Project')||''});"
+            "})()"
+        )
+        result = harness.evaluate(page["webSocketDebuggerUrl"], js)
+        cred = json.loads(result.get("value") or "{}")
+        if not cred.get("token"):
+            raise CDPError("未找到登录 token：请先在调试 Chrome 里登录 bigmodel.cn")
+        if not cred.get("org") or not cred.get("proj"):
+            raise CDPError(
+                "未找到组织/项目信息：请打开 bigmodel.cn 团队用量页后再提取")
+        return {
+            "auth_token": cred["token"],
+            "org_id": cred["org"],
+            "project_id": cred["proj"],
+        }
+
+    def _fetch_team_http(self, data: UsageData) -> UsageData:
+        """纯 HTTP 直连 sub-account-rank（凭证已提取，无需浏览器）。"""
+        headers = {
+            "Accept": "application/json",
+            "Authorization": self.cfg["auth_token"].strip(),
+            "Bigmodel-Organization": self.cfg["org_id"].strip(),
+            "Bigmodel-Project": self.cfg["project_id"].strip(),
+            "User-Agent": BROWSER_UA,
+            "Referer": "https://bigmodel.cn/coding-plan/team/usage-stats",
+        }
+        now = datetime.now()
+        params = {
+            "startTime": (now - timedelta(days=6)).strftime("%Y-%m-%d") + " 00:00:00",
+            "endTime": now.strftime("%Y-%m-%d") + " 23:59:59",
+            "pageNum": 1, "pageSize": 20, "keyword": "",
+        }
+        return self._get(self.TEAM_RANK_URL, headers, data, params, self._parse_team)
 
     # ---- CDP 模式 ----
     def _fetch_team_cdp(self, data: UsageData) -> UsageData:
@@ -150,14 +217,16 @@ class ZhipuProvider(BaseProvider):
             r = requests.get(url, headers=headers, params=params, timeout=15)
         except requests.RequestException as e:
             return self._err(data, f"网络错误: {e}")
+        if r.status_code >= 400:
+            return self._err(data, f"HTTP {r.status_code}（凭证可能已过期，请重新提取）")
         if not r.text.strip():
-            return self._err(data, "接口返回空（Cookie 可能失效或被反爬），请重新登录抓取")
+            return self._err(data, "接口返回空（凭证可能已失效），请重新提取")
         try:
             j = r.json()
         except ValueError:
             return self._err(data, f"非 JSON 响应（HTTP {r.status_code}）")
         if not j.get("success") or not j.get("data"):
-            return self._err(data, j.get("msg") or "响应异常")
+            return self._err(data, j.get("msg") or "响应异常（凭证可能已失效）")
         parse(j["data"], data)
         return data
 

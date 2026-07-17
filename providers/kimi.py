@@ -1,6 +1,11 @@
 """Kimi（月之暗面）会员/订阅额度 Provider。
 
-通过 CDP 在已登录的 www.kimi.com 页面上下文调用会员网关：
+取数方式（按优先级）：
+  1. 凭证直连（推荐）：cookie 已提取时纯 HTTP POST 会员网关，
+     kimi-auth JWT 有效期约 28 天，不开浏览器
+  2. CDP 模式：连接已登录调试 Chrome 抓 HttpOnly cookie 后页面内 fetch（兜底）
+
+接口：
   POST /apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats
 
 返回包含：
@@ -11,13 +16,16 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 from datetime import datetime, timezone
 
+import requests
+
 from logger import log
 
-from .base import BaseProvider, UsageData, UsageItem
-from .cdp import CDPHarness, CDPError
+from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA
+from .cdp import CDPHarness, CDPError, extract_domain_cookies, cookie_header
 
 
 class KimiProvider(BaseProvider):
@@ -25,16 +33,63 @@ class KimiProvider(BaseProvider):
 
     API_PATH = "/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats"
     PAGE_KEYWORD = "kimi.com/code/console"
+    SITE_NAME = "www.kimi.com/code/console"
 
     def fetch(self) -> UsageData:
         name = self.cfg.get("name") or "Kimi"
         data = UsageData(
             provider_name=name, plan_level="订阅额度", fetched_at=time.time())
 
+        # 优先凭证直连：cookie 已提取时纯 HTTP，不开浏览器
+        if self.has_direct_credentials(self.cfg):
+            result = self._fetch_http(data)
+            if result.status != "error":
+                return result
+            log(f"Kimi 凭证直连失败（{result.error}），尝试 CDP 兜底")
+            if not self.cfg.get("cdp_enabled", True):
+                return result
+            return self._fallback_cdp(data, result.error, self._fetch_cdp)
+
         if self.cfg.get("cdp_enabled", True):
             return self._fetch_cdp(data)
 
-        return self._err(data, "Kimi 额度需启用 CDP 并在 CDP Chrome 中登录 www.kimi.com")
+        return self._err(data, "请在设置里点「提取凭证」，或启用 CDP 并登录 www.kimi.com")
+
+    # ---- 凭证直连模式 ----
+    @staticmethod
+    def has_direct_credentials(cfg: dict) -> bool:
+        return "kimi-auth=" in (cfg.get("cookie") or "")
+
+    @classmethod
+    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
+        _, cookies = extract_domain_cookies(
+            port, cdp_url, cls.PAGE_KEYWORD, "kimi.com")
+        if not any(c.get("name") == "kimi-auth" for c in cookies):
+            raise CDPError("未找到 kimi-auth cookie：请先在调试 Chrome 里登录 Kimi")
+        return {"cookie": cookie_header(cookies)}
+
+    def _fetch_http(self, data: UsageData) -> UsageData:
+        cookie = self.cfg["cookie"].strip()
+        m = re.search(r"(?:^|;\s*)kimi-auth=([^;]+)", cookie)
+        if not m:
+            return self._err(data, "cookie 中缺少 kimi-auth（请重新提取凭证）")
+        token = m.group(1)
+        payload = self._decode_jwt_payload(token)
+        headers = self._build_headers(token, payload)
+        headers["User-Agent"] = BROWSER_UA
+        headers["Origin"] = "https://www.kimi.com"
+        headers["Referer"] = "https://www.kimi.com/code/console"
+        headers["Cookie"] = cookie
+        try:
+            r = requests.post("https://www.kimi.com" + self.API_PATH,
+                              headers=headers, json={}, timeout=20)
+        except requests.RequestException as e:
+            return self._err(data, f"网络错误: {e}")
+        wrapper = json.dumps({
+            "status": r.status_code, "statusText": r.reason, "body": r.text})
+        return self._parse_json(wrapper, data)
+
+    # ---- CDP 模式 ----
 
     def _fetch_cdp(self, data: UsageData) -> UsageData:
         port = int(self.cfg.get("cdp_port") or 9222)
@@ -77,15 +132,9 @@ class KimiProvider(BaseProvider):
             return self._err(data, "API 返回空")
         return self._parse_json(text, data)
 
-    def _build_js(self, token: str, payload: dict) -> str:
-        """构造在页面上下文执行的 fetch JS，返回 {status, statusText, body}。
-
-        token 与 payload 已在外部从 CDP cookie 解析好，直接注入 JS，
-        避免 HttpOnly cookie 无法被 document.cookie 读取的问题。
-        """
-        sub = payload.get("sub") or ""
-        device_id = payload.get("device_id") or ""
-        sssid = payload.get("ssid") or ""
+    @staticmethod
+    def _build_headers(token: str, payload: dict) -> dict:
+        """构造会员网关请求头（HTTP 直连与 CDP JS 共用）。"""
         headers = {
             "Content-Type": "application/json",
             "Accept": "*/*",
@@ -96,16 +145,26 @@ class KimiProvider(BaseProvider):
             "x-msh-platform": "web",
             "x-msh-version": "1.0.0",
         }
+        sub = payload.get("sub") or ""
+        device_id = payload.get("device_id") or ""
+        sssid = payload.get("ssid") or ""
         if sub:
             headers["x-traffic-id"] = sub
         if device_id:
             headers["x-msh-device-id"] = device_id
         if sssid:
             headers["x-msh-session-id"] = sssid
+        return headers
 
+    def _build_js(self, token: str, payload: dict) -> str:
+        """构造在页面上下文执行的 fetch JS，返回 {status, statusText, body}。
+
+        token 与 payload 已在外部从 CDP cookie 解析好，直接注入 JS，
+        避免 HttpOnly cookie 无法被 document.cookie 读取的问题。
+        """
         return (
             "(async()=>{"
-            "const h=" + json.dumps(headers) + ";"
+            "const h=" + json.dumps(self._build_headers(token, payload)) + ";"
             "const u=new URL(" + json.dumps(self.API_PATH) + ",location.origin);"
             "u.searchParams.set('_tv',Date.now());"
             "const r=await fetch(u.href,{method:'POST',credentials:'include',headers:h,body:'{}',cache:'no-store'});"
@@ -159,23 +218,21 @@ class KimiProvider(BaseProvider):
         if j.get("code") not in (None, 0, "0"):
             return self._err(data, j.get("message") or j.get("msg") or f"业务错误: {j.get('code')}")
 
-        # 5h 速率窗口
+        # 5h 速率窗口（ratio 缺失时按 0% 处理，窗口刚重置时 API 不返回 ratio）
         five_h = j.get("ratelimitCode5h") or {}
         if five_h.get("enabled"):
-            ratio = five_h.get("ratio")
-            if ratio is not None:
-                reset_at = self._parse_iso_ts(five_h.get("resetTime"))
-                data.items.append(UsageItem(
-                    "5h 窗口", float(ratio) * 100, reset_at, ""))
+            ratio = five_h.get("ratio") or 0
+            reset_at = self._parse_iso_ts(five_h.get("resetTime"))
+            data.items.append(UsageItem(
+                "5h 窗口", float(ratio) * 100, reset_at, ""))
 
         # 7d 速率窗口
         seven_d = j.get("ratelimitCode7d") or {}
         if seven_d.get("enabled"):
-            ratio = seven_d.get("ratio")
-            if ratio is not None:
-                reset_at = self._parse_iso_ts(seven_d.get("resetTime"))
-                data.items.append(UsageItem(
-                    "7d 窗口", float(ratio) * 100, reset_at, ""))
+            ratio = seven_d.get("ratio") or 0
+            reset_at = self._parse_iso_ts(seven_d.get("resetTime"))
+            data.items.append(UsageItem(
+                "7d 窗口", float(ratio) * 100, reset_at, ""))
 
         # 订阅额度
         balance = j.get("subscriptionBalance") or {}

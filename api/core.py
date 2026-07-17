@@ -55,16 +55,24 @@ class Api:
         cdp_ok: dict[int, bool] = {}
 
         def fetch_one(p: dict) -> dict:
-            # CDP 快速预检：Chrome 没运行时直接返回错误，不等超时
+            # CDP 快速预检：Chrome 没运行时直接返回错误，不等超时。
+            # 已提取直连凭证的 provider 走纯 HTTP，不依赖 CDP，跳过预检。
             if p.get("cdp_enabled", False):
-                port = p.get("cdp_port", 9222)
-                if port not in cdp_ok:
-                    cdp_ok[port] = self._cdp_running(port)
-                if not cdp_ok[port]:
-                    return self._usage_to_dict(
-                        p, provider_mod.UsageData(
-                            provider_name=p.get("name") or p.get("type"),
-                            status="error", error="CDP Chrome 未启动"))
+                try:
+                    has_cred = provider_mod.provider_class(
+                        p.get("type")).has_direct_credentials(p)
+                except (ValueError, AttributeError):
+                    has_cred = False
+                if not has_cred:
+                    port = p.get("cdp_port", 9222)
+                    if port not in cdp_ok:
+                        cdp_ok[port] = self._cdp_running(port)
+                    if not cdp_ok[port]:
+                        return self._usage_to_dict(
+                            p, provider_mod.UsageData(
+                                provider_name=p.get("name") or p.get("type"),
+                                status="error",
+                                error="未提取凭证，请在设置页点「提取凭证」"))
             try:
                 data = provider_mod.build(p).fetch()
                 return self._usage_to_dict(p, data)
@@ -143,6 +151,38 @@ class Api:
 
     def get_provider(self, provider_id: str) -> Optional[dict]:
         return providers_api.get(self.cfg, provider_id)
+
+    def extract_provider_credentials(self, provider_id: str) -> dict:
+        """从 CDP Chrome 一次性提取登录凭证并保存。
+
+        提取成功后该 provider 日常刷新走纯 HTTP，不再依赖浏览器常开。
+        """
+        p = providers_api.get(self.cfg, provider_id)
+        if not p:
+            return {"success": False, "error": "账号不存在"}
+        try:
+            cls = provider_mod.provider_class(p.get("type"))
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        try:
+            extracted = cls.extract_credentials(
+                port=int(p.get("cdp_port") or 9222),
+                cdp_url=p.get("cdp_url") or "")
+        except provider_mod.CDPNotConnected:
+            return {"success": False,
+                    "error": "连接失败：请先点「启动调试 Chrome」并登录"}
+        except provider_mod.CDPPageNotFound:
+            site = getattr(cls, "SITE_NAME", "") or "目标站点"
+            return {"success": False,
+                    "error": f"未找到页面：请在调试 Chrome 打开 {site} 并登录"}
+        except provider_mod.CDPError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            log(f"提取凭证异常: {e}")
+            return {"success": False, "error": f"提取失败: {e}"}
+        providers_api.update(self.cfg, provider_id, extracted)
+        log(f"已提取 {p.get('type')} 凭证: {sorted(extracted.keys())}")
+        return {"success": True, "fields": sorted(extracted.keys())}
 
     # ===================================================================
     # CDP Chrome 启动

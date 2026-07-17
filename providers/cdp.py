@@ -261,3 +261,22 @@ class CDPHarness:
             except Exception:
                 break
         raise CDPEvalError(f"等待 CDP id={msg_id} 响应超时")
+
+
+def extract_domain_cookies(port: int, cdp_url: str, page_keyword: str,
+                           domain: str) -> tuple[dict, list[dict]]:
+    """find_page + Network.getAllCookies + 按 domain 过滤，返回 (page, cookies)。
+
+    各 provider 的 extract_credentials 共用：凭证提取只需要一次性拿到
+    页面 cookie（含 HttpOnly），之后纯 HTTP 直连，不再依赖浏览器。
+    """
+    harness = CDPHarness(
+        port=port, page_keyword=page_keyword, cdp_url=cdp_url, eval_timeout=30)
+    page = harness.find_page()
+    cookies = harness.get_cookies(page["webSocketDebuggerUrl"])
+    return page, [c for c in cookies if domain in (c.get("domain") or "")]
+
+
+def cookie_header(cookies: list[dict]) -> str:
+    """把 CDP cookie 对象列表拼成 HTTP Cookie 头值。"""
+    return "; ".join(f"{c['name']}={c['value']}" for c in cookies)

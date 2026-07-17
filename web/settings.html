@@ -275,7 +275,11 @@
                 <label>CDP 端口</label>
                 <input type="number" id="edit-cdp-port" value="9222" min="1024" max="65535">
             </div>
-            <button class="btn btn-small" onclick="launchCdp('zhipu')">🚀 启动调试 Chrome</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('zhipu')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-zhipu"></div>
         </div>
 
         <!-- Kimi 特有字段 -->
@@ -292,7 +296,11 @@
                 <label>CDP 端口</label>
                 <input type="number" id="edit-kimi-cdp-port" value="9222" min="1024" max="65535">
             </div>
-            <button class="btn btn-small" onclick="launchCdp('kimi')">🚀 启动调试 Chrome</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('kimi')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-kimi"></div>
         </div>
 
         <!-- OpenCode 特有字段 -->
@@ -313,7 +321,11 @@
                 <label>CDP 端口</label>
                 <input type="number" id="edit-oc-cdp-port" value="9222" min="1024" max="65535">
             </div>
-            <button class="btn btn-small" onclick="launchCdp('opencode')">🚀 启动调试 Chrome</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('opencode')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-opencode"></div>
         </div>
 
         <!-- MiMo 特有字段 -->
@@ -330,7 +342,11 @@
                 <label>CDP 端口</label>
                 <input type="number" id="edit-mimo-cdp-port" value="9222" min="1024" max="65535">
             </div>
-            <button class="btn btn-small" onclick="launchCdp('mimo')">🚀 启动调试 Chrome</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('mimo')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-mimo"></div>
         </div>
 
         <!-- 火山 Ark 特有字段 -->
@@ -347,7 +363,11 @@
                 <label>CDP 端口</label>
                 <input type="number" id="edit-volcengine-cdp-port" value="9222" min="1024" max="65535">
             </div>
-            <button class="btn btn-small" onclick="launchCdp('volcengine')">🚀 启动调试 Chrome</button>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('volcengine')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-volcengine"></div>
         </div>
 
         <div class="provider-actions">
@@ -385,6 +405,45 @@
     <script>
         let config = {};
         let selectedProviderId = null;
+
+        function credStatus(p) {
+            if (p.type === 'zhipu') return !!(p.auth_token && p.org_id && p.project_id);
+            if (p.type === 'opencode') return !!(p.cookie && p.workspace_id);
+            return !!p.cookie;
+        }
+
+        function updateCredStatus(p) {
+            const el = document.getElementById('cred-status-' + p.type);
+            if (!el) return;
+            if (credStatus(p)) {
+                el.textContent = '✓ 已提取凭证，日常刷新免开浏览器（凭证失效时会自动回退 CDP）';
+                el.style.color = 'var(--color-green)';
+            } else {
+                el.textContent = '未提取凭证，当前依赖调试 Chrome 常开。点「提取凭证」后日常刷新免开浏览器';
+                el.style.color = 'var(--text-dim)';
+            }
+        }
+
+        async function extractCreds(btn) {
+            if (!selectedProviderId || !window.pywebview || !window.pywebview.api) return;
+            btn.disabled = true;
+            try {
+                const result = await window.pywebview.api.extract_provider_credentials(selectedProviderId);
+                if (result.success) {
+                    const updated = await window.pywebview.api.get_provider(selectedProviderId);
+                    const idx = config.providers.findIndex(p => p.id === selectedProviderId);
+                    if (idx >= 0 && updated) config.providers[idx] = updated;
+                    selectProvider(selectedProviderId);
+                    alert('凭证提取成功！日常刷新将不再依赖浏览器。');
+                } else {
+                    alert('提取失败: ' + result.error);
+                }
+            } catch (e) {
+                alert('提取失败: ' + e);
+            } finally {
+                btn.disabled = false;
+            }
+        }
 
         async function loadConfig() {
             if (window.pywebview && window.pywebview.api) {
@@ -471,6 +530,7 @@
                 document.getElementById('edit-volcengine-cdp-port').value = provider.cdp_port || 9222;
             }
 
+            updateCredStatus(provider);
             renderProviders();
         }
 

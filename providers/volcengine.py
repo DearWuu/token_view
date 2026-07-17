@@ -1,6 +1,9 @@
 """火山引擎 Ark Agent Plan Provider。
 
-通过 CDP 在已登录页面上下文 POST GetAgentPlanAFPUsage 拿用量。
+取数方式（按优先级）：
+  1. 凭证直连：cookie 已提取时纯 HTTP POST GetAgentPlanAFPUsage
+     （x-csrf-token 从 cookie 里的 csrfToken 取；csrf 失效时回退 CDP）
+  2. CDP 模式：连接已登录调试 Chrome，reload 页面刷新 CSRF 后页面内 POST
 
 API：POST /api/top/ark/cn-beijing/2024-01-01/GetAgentPlanAFPUsage
 Body: {"projectName":"default"}
@@ -20,16 +23,22 @@ Body: {"projectName":"default"}
 from __future__ import annotations
 
 import json
+import re
 import time
 
-from .base import BaseProvider, UsageData, UsageItem, fmt_tokens
-from .cdp import CDPHarness, CDPError
+import requests
+
+from logger import log
+
+from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA, fmt_tokens
+from .cdp import CDPHarness, CDPError, extract_domain_cookies, cookie_header
 
 
 class VolcEngineProvider(BaseProvider):
     """火山引擎 Ark Agent Plan。"""
 
     API_PATH = "/api/top/ark/cn-beijing/2024-01-01/GetAgentPlanAFPUsage"
+    SITE_NAME = "console.volcengine.com"
     PLAN_LABELS = {
         "large": "Large",
         "medium": "Medium",
@@ -41,10 +50,59 @@ class VolcEngineProvider(BaseProvider):
         data = UsageData(
             provider_name=name, plan_level="Agent Plan", fetched_at=time.time())
 
+        # 优先凭证直连：cookie 已提取时纯 HTTP，不开浏览器
+        if self.has_direct_credentials(self.cfg):
+            result = self._fetch_http(data)
+            if result.status != "error":
+                return result
+            log(f"火山凭证直连失败（{result.error}），尝试 CDP 兜底")
+            if not self.cfg.get("cdp_enabled", True):
+                return result
+            return self._fallback_cdp(data, result.error, self._fetch_cdp)
+
         if self.cfg.get("cdp_enabled", True):
             return self._fetch_cdp(data)
 
-        return self._err(data, "请启用 CDP 模式并在 CDP Chrome 里登录 console.volcengine.com")
+        return self._err(data, "请在设置里点「提取凭证」，或启用 CDP 并登录 console.volcengine.com")
+
+    # ---- 凭证直连模式 ----
+    @staticmethod
+    def has_direct_credentials(cfg: dict) -> bool:
+        return bool((cfg.get("cookie") or "").strip())
+
+    @classmethod
+    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
+        _, cookies = extract_domain_cookies(
+            port, cdp_url, "volcengine.com", "volcengine")
+        if not cookies:
+            raise CDPError(
+                "未找到 cookie：请先在调试 Chrome 里登录 console.volcengine.com")
+        return {"cookie": cookie_header(cookies)}
+
+    def _fetch_http(self, data: UsageData) -> UsageData:
+        cookie = self.cfg["cookie"].strip()
+        m = re.search(r"(?:^|;\s*)csrfToken=([^;]+)", cookie)
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Cookie": cookie,
+            "User-Agent": BROWSER_UA,
+            "Referer": "https://console.volcengine.com/",
+            "Origin": "https://console.volcengine.com",
+        }
+        if m:
+            headers["x-csrf-token"] = m.group(1)
+        try:
+            r = requests.post(
+                "https://console.volcengine.com" + self.API_PATH,
+                headers=headers, json={"projectName": "default"}, timeout=20)
+        except requests.RequestException as e:
+            return self._err(data, f"网络错误: {e}")
+        if r.status_code >= 400:
+            return self._err(data, f"HTTP {r.status_code}（cookie 可能已失效）")
+        return self._parse_json(r.text, data)
+
+    # ---- CDP 模式 ----
 
     def _fetch_cdp(self, data: UsageData) -> UsageData:
         port = int(self.cfg.get("cdp_port") or 9222)

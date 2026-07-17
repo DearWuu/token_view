@@ -1,6 +1,8 @@
 """小米 MiMo Token Plan Provider。
 
-通过 CDP 调 /api/v1/tokenPlan/usage 拿月度用量。
+取数方式（按优先级）：
+  1. 凭证直连（推荐）：cookie 已提取时纯 HTTP 调 /api/v1/tokenPlan/usage
+  2. CDP 模式：连接已登录调试 Chrome，在页面上下文 fetch（直连失败兜底）
 
 返回格式：
   {
@@ -18,29 +20,56 @@ import time
 
 import requests
 
+from logger import log
+
 from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA, fmt_tokens
-from .cdp import CDPHarness, CDPError
+from .cdp import CDPHarness, CDPError, extract_domain_cookies, cookie_header
 
 
 class MimoProvider(BaseProvider):
     """小米 MiMo Token Plan。"""
 
     API_PATH = "/api/v1/tokenPlan/usage"
+    SITE_NAME = "platform.xiaomimimo.com"
 
     def fetch(self) -> UsageData:
         name = self.cfg.get("name") or "小米 MiMo"
         data = UsageData(
             provider_name=name, plan_level="Token Plan", fetched_at=time.time())
 
+        # 优先凭证直连：cookie 已提取时纯 HTTP，不开浏览器
+        if self.has_direct_credentials(self.cfg):
+            result = self._fetch_http(data)
+            if result.status != "error":
+                return result
+            log(f"MiMo 凭证直连失败（{result.error}），尝试 CDP 兜底")
+            if not self.cfg.get("cdp_enabled", True):
+                return result
+            return self._fallback_cdp(data, result.error, self._fetch_cdp)
+
         if self.cfg.get("cdp_enabled", True):
             return self._fetch_cdp(data)
 
-        cookie = (self.cfg.get("cookie") or "").strip()
-        if not cookie:
-            return self._err(data,
-                "未配置 cookie（请在设置里打开 CDP Chrome 并登录 platform.xiaomimimo.com）")
+        return self._err(data,
+            "未配置 cookie（请在设置里打开 CDP Chrome 登录后点「提取凭证」）")
+
+    # ---- 凭证直连模式 ----
+    @staticmethod
+    def has_direct_credentials(cfg: dict) -> bool:
+        return bool((cfg.get("cookie") or "").strip())
+
+    @classmethod
+    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
+        _, cookies = extract_domain_cookies(
+            port, cdp_url, "xiaomimimo.com", "xiaomimimo")
+        if not cookies:
+            raise CDPError(
+                "未找到 cookie：请先在调试 Chrome 里登录 platform.xiaomimimo.com")
+        return {"cookie": cookie_header(cookies)}
+
+    def _fetch_http(self, data: UsageData) -> UsageData:
         headers = {
-            "Cookie": cookie,
+            "Cookie": self.cfg["cookie"].strip(),
             "User-Agent": BROWSER_UA,
             "Accept": "application/json",
             "Referer": "https://platform.xiaomimimo.com/",
@@ -54,6 +83,8 @@ class MimoProvider(BaseProvider):
         if r.status_code >= 400:
             return self._err(data, f"HTTP {r.status_code}（cookie 可能已失效）")
         return self._parse_json(r.text, data)
+
+    # ---- CDP 模式 ----
 
     def _fetch_cdp(self, data: UsageData) -> UsageData:
         port = int(self.cfg.get("cdp_port") or 9222)
