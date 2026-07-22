@@ -217,7 +217,7 @@ body.top-mode:not(.compact) .usage-item {
 }
 
 body.top-mode:not(.compact) .usage-row {
-    grid-template-columns: minmax(74px, 0.7fr) minmax(120px, 1.5fr) minmax(40px, auto);
+    grid-template-columns: minmax(74px, 0.7fr) minmax(120px, 1.5fr) auto minmax(40px, auto);
     gap: 7px;
 }
 
@@ -415,7 +415,7 @@ body.top-mode:not(.compact) .usage-note {
 
 .usage-row {
     display: grid;
-    grid-template-columns: minmax(54px, 0.85fr) minmax(56px, 1fr) minmax(38px, auto);
+    grid-template-columns: minmax(54px, 0.85fr) minmax(56px, 1fr) auto minmax(38px, auto);
     align-items: center;
     gap: 8px;
     min-width: 0;
@@ -459,6 +459,39 @@ body.top-mode:not(.compact) .usage-note {
 
 .usage-percent.warning { color: var(--color-yellow); }
 .usage-percent.danger { color: var(--color-red); }
+
+/* 重置倒计时圆环：满环表示窗口刚重置，随时间递减 */
+.reset-ring {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 14px;
+    height: 14px;
+}
+
+.reset-ring svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.reset-ring circle {
+    fill: none;
+    stroke-width: 2;
+}
+
+.reset-ring .ring-bg { stroke: var(--bg-bar); }
+.reset-ring .ring-fg {
+    stroke: var(--color-blue);
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.5s linear;
+}
+
+body.compact .reset-ring {
+    width: 11px;
+    height: 11px;
+}
 
 .usage-note {
     font-size: 10px;
@@ -799,6 +832,11 @@ body.dock-mode .usage-percent {
     white-space: nowrap;
 }
 
+body.dock-mode .reset-ring {
+    width: 16px;
+    height: 16px;
+}
+
 body.dock-mode .usage-note {
     display: none;
 }
@@ -883,10 +921,10 @@ body.dock-mode .loading {
     }
 
     .usage-row {
-        grid-template-columns: minmax(0, 1fr) minmax(34px, auto);
+        grid-template-columns: minmax(0, 1fr) auto minmax(34px, auto);
         grid-template-areas:
-            "label pct"
-            "bar bar";
+            "label ring pct"
+            "bar bar bar";
         row-gap: 5px;
     }
 
@@ -897,6 +935,10 @@ body.dock-mode .loading {
 
     .progress-bar {
         grid-area: bar;
+    }
+
+    .reset-ring {
+        grid-area: ring;
     }
 
     .usage-percent {

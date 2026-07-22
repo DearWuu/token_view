@@ -24,8 +24,18 @@ class TrayIcon:
         self._thread = None
 
     def _make_image(self):
-        """生成蓝色圆角 + 白色 T 的托盘图标。"""
+        """托盘图标：优先用 assets/icon.png（与应用图标一致），
+        找不到时回退到手绘蓝底白 T。"""
+        import os
         from PIL import Image, ImageDraw
+        icon_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'assets', 'icon.png')
+        if os.path.exists(icon_path):
+            try:
+                return Image.open(icon_path).convert('RGBA').resize(
+                    (64, 64), Image.LANCZOS)
+            except Exception as e:
+                log(f"加载 assets/icon.png 失败，回退手绘图标: {e}")
         size = 64
         image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)

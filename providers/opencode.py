@@ -221,12 +221,20 @@ class OpenCodeProvider(BaseProvider):
                 reset_sec = usage.get("resetInSec")
                 if pct is not None:
                     data.items.append(UsageItem(
-                        label, float(pct), note=self._reset_note(reset_sec)))
+                        label, float(pct), self._reset_at(reset_sec),
+                        note=self._reset_note(reset_sec)))
 
         if not data.items:
             data.status = "empty"
             data.error = "未找到用量数据，请确保页面显示了用量信息"
         return data
+
+    @staticmethod
+    def _reset_at(reset_sec):
+        """resetInSec（距重置的秒数）→ 重置时刻的 Unix 时间戳。"""
+        if isinstance(reset_sec, (int, float)) and reset_sec > 0:
+            return time.time() + reset_sec
+        return None
 
     @staticmethod
     def _reset_note(reset_sec) -> str:
@@ -266,11 +274,15 @@ class OpenCodeProvider(BaseProvider):
                 m = re.search(pat, text)
                 if m:
                     note = ""
+                    reset_at = None
                     mr = re.search(
                         rf'\b{key}\s*:[^}}]*?resetInSec\s*:\s*(\d+)', text)
                     if mr:
-                        note = self._reset_note(int(mr.group(1)))
-                    data.items.append(UsageItem(label, float(m.group(1)), note=note))
+                        reset_sec = int(mr.group(1))
+                        note = self._reset_note(reset_sec)
+                        reset_at = self._reset_at(reset_sec)
+                    data.items.append(UsageItem(
+                        label, float(m.group(1)), reset_at, note=note))
                     found = True
                     break
         return found
@@ -289,7 +301,11 @@ class OpenCodeProvider(BaseProvider):
             for key, label in labels.items():
                 usage = obj.get(key)
                 if isinstance(usage, dict) and usage.get("usagePercent") is not None:
-                    data.items.append(UsageItem(label, float(usage.get("usagePercent"))))
+                    reset_sec = usage.get("resetInSec")
+                    data.items.append(UsageItem(
+                        label, float(usage.get("usagePercent")),
+                        self._reset_at(reset_sec),
+                        note=self._reset_note(reset_sec)))
                     found = True
             if found:
                 return True

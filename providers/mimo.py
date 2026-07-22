@@ -22,7 +22,8 @@ import requests
 
 from logger import log
 
-from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA, fmt_tokens
+from .base import (BaseProvider, UsageData, UsageItem, BROWSER_UA, fmt_tokens,
+                   next_month_start)
 from .cdp import CDPHarness, CDPError, extract_domain_cookies, cookie_header
 
 
@@ -156,7 +157,9 @@ class MimoProvider(BaseProvider):
                 limit = it.get("limit", 0)
                 if limit > 0:
                     note = f"{fmt_tokens(used)} / {fmt_tokens(limit)} tokens"
-            data.items.append(UsageItem("Monthly usage", pct, note=note))
+            # 接口不返回重置时间，月度额度按自然月（次月 1 号）估算
+            data.items.append(
+                UsageItem("Monthly usage", pct, next_month_start(), note=note))
 
         if not data.items:
             data.status = "empty"

@@ -30,6 +30,8 @@ class ZhipuProvider(BaseProvider):
     """智谱 GLM Coding Plan。"""
 
     TEAM_RANK_URL = "https://bigmodel.cn/api/monitor/usage/sub-account-rank"
+    # 团队版页面同款接口：返回各窗口 nextResetTime（毫秒时间戳）
+    QUOTA_LIMIT_URL = "https://bigmodel.cn/api/monitor/usage/quota/limit"
     CDP_EVAL_TIMEOUT = 30
     SITE_NAME = "bigmodel.cn"
 
@@ -140,7 +142,41 @@ class ZhipuProvider(BaseProvider):
             "endTime": now.strftime("%Y-%m-%d") + " 23:59:59",
             "pageNum": 1, "pageSize": 20, "keyword": "",
         }
-        return self._get(self.TEAM_RANK_URL, headers, data, params, self._parse_team)
+        resets = self._fetch_quota_resets_http(headers)
+        parse = (lambda d, data: self._parse_team(d, data, resets)) if resets else self._parse_team
+        return self._get(self.TEAM_RANK_URL, headers, data, params, parse)
+
+    def _fetch_quota_resets_http(self, headers: dict) -> dict:
+        """调 quota/limit?type=2 拿各窗口 nextResetTime → {label: reset_at}。
+
+        失败返回空 dict（不阻塞主流程，只是没有重置倒计时）。
+        """
+        try:
+            r = requests.get(self.QUOTA_LIMIT_URL, headers=headers,
+                             params={"type": 2}, timeout=15)
+            return self._parse_quota_resets(r.json())
+        except Exception as e:  # noqa: BLE001
+            log(f"智谱 quota/limit 获取重置时间失败: {e}")
+            return {}
+
+    @staticmethod
+    def _parse_quota_resets(j: dict) -> dict:
+        """quota/limit 响应 → {团队版 label: reset_at(秒)}。"""
+        out = {}
+        for lim in (j.get("data") or {}).get("limits", []) or []:
+            reset = lim.get("nextResetTime")
+            if not isinstance(reset, (int, float)):
+                continue
+            t = lim.get("type")
+            if t == "TOKENS_LIMIT":
+                label = ZHIPU_UNIT_LABEL.get(lim.get("unit"))
+            elif t == "TIME_LIMIT":
+                label = "MCP 月度"
+            else:
+                label = None
+            if label:
+                out[label] = reset / 1000
+        return out
 
     # ---- CDP 模式 ----
     def _fetch_team_cdp(self, data: UsageData) -> UsageData:
@@ -176,7 +212,12 @@ class ZhipuProvider(BaseProvider):
             f"'/api/monitor/usage/sub-account-rank?startTime={st}&endTime={et}"
             f"&pageNum=1&pageSize=20&keyword=&_={cache_bust}'"
             ",{credentials:'include',headers:h,cache:'no-store'});"
-            "return await r.text();})()"
+            "var quota='';"
+            "try{"
+            f"const r2=await fetch('/api/monitor/usage/quota/limit?type=2&_={cache_bust}',"
+            "{credentials:'include',headers:h,cache:'no-store'});"
+            "quota=await r2.text();}catch(e){}"
+            "return JSON.stringify({rank:await r.text(),quota:quota});})()"
         )
 
         try:
@@ -189,13 +230,19 @@ class ZhipuProvider(BaseProvider):
         if not text.strip():
             return self._err(data, "CDP fetch 返回空（登录可能已失效）")
         try:
-            j = json.loads(text)
+            payload = json.loads(text)
+            j = json.loads(payload.get("rank") or "{}")
         except ValueError as e:
             return self._err(data, f"接口返回非 JSON: {e}")
         if not j.get("success") or not j.get("data"):
             return self._err(data, j.get("msg") or "接口返回空（登录可能已过期）")
 
-        self._parse_team(j["data"], data)
+        resets = {}
+        try:
+            resets = self._parse_quota_resets(json.loads(payload.get("quota") or "{}"))
+        except ValueError:
+            pass
+        self._parse_team(j["data"], data, resets)
         return data
 
     def _translate_cdp_error(self, e: CDPError) -> str:
@@ -231,8 +278,12 @@ class ZhipuProvider(BaseProvider):
         return data
 
     # ---- 解析 ----
-    def _parse_team(self, d, data: UsageData) -> None:
-        """团队版 sub-account-rank：按 customer_id 匹配当前成员，否则取排名第一。"""
+    def _parse_team(self, d, data: UsageData, reset_map: dict | None = None) -> None:
+        """团队版 sub-account-rank：按 customer_id 匹配当前成员，否则取排名第一。
+
+        reset_map：quota/limit?type=2 提供的 {label: reset_at}，
+        团队版接口本身只有百分比、不返回重置时间（实测确认）。
+        """
         rank_list = d.get("rankList") or []
         if not rank_list:
             data.status = "empty"
@@ -250,7 +301,8 @@ class ZhipuProvider(BaseProvider):
                          ("MCP 月度", "mcpPercentage")]:
             v = rs.get(k)
             if v is not None:
-                data.items.append(UsageItem(label, float(v)))
+                reset_at = (reset_map or {}).get(label)
+                data.items.append(UsageItem(label, float(v), reset_at))
         if not data.items:
             data.status = "empty"
 

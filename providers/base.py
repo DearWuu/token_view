@@ -23,6 +23,23 @@ def fmt_tokens(n) -> str:
     return str(int(n))
 
 
+def next_week_start() -> float:
+    """下周一 00:00 本地时间的 Unix 时间戳（自然周重置的估算锚点）。"""
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    monday = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return (monday + timedelta(days=7)).timestamp()
+
+
+def next_month_start() -> float:
+    """次月 1 号 00:00 本地时间的 Unix 时间戳（自然月重置的估算锚点）。"""
+    from datetime import datetime
+    now = datetime.now()
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    return datetime(year, month, 1).timestamp()
+
+
 @dataclass
 class UsageItem:
     """单个用量窗口。"""
