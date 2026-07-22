@@ -14,6 +14,7 @@ PROJECT_ROOT = SPEC_DIR
 # 让 web/ 在 EXE 同级可访问
 datas = [
     (str(PROJECT_ROOT / 'web'), 'web'),
+    (str(PROJECT_ROOT / 'assets' / 'icon.png'), 'assets'),
 ]
 
 # === 隐式 import (pywebview / pystray / 一些动态 import) ===
@@ -108,4 +109,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(PROJECT_ROOT / 'assets' / 'icon.ico'),
 )

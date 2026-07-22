@@ -23,6 +23,7 @@ DEFAULT: dict[str, Any] = {
     "refresh_interval": 15,   # 秒
     "opacity": 0.92,          # 悬浮窗透明度 0~1
     "always_on_top": True,
+    "theme": "dark",          # dark / light
     "geometry": None,         # [x, y, w, h]，记忆窗口位置
     "compact": False,         # 紧凑模式
     "dock": False,            # 顶部条模式
@@ -98,9 +99,21 @@ def new_provider(ptype: str) -> dict:
             "endpoint": "/api/monitor/usage/quota/limit",
             "cookie": "",
             "usage_url": "",
+            # 凭证直连三件套：从 CDP Chrome 一次性提取后纯 HTTP 直连，
+            # 日常刷新不再依赖浏览器
             "auth_token": "",
+            "org_id": "",
+            "project_id": "",
             "customer_id": "",
-            # CDP 模式：连接用户已登录的调试 Chrome 抓团队用量，避开反爬
+            # CDP 模式：直连失败/未提取凭证时兜底
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
+    elif ptype == "kimi":
+        base.update({
+            "cookie": "",
+            "name": "Kimi",
             "cdp_enabled": True,
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",

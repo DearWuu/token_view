@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!-- TokenView 应用图标设计稿：用无头 Chrome 截图渲染成 icon.png，
+     再由 Pillow 合成多尺寸 icon.ico（见 AGENTS.md 打包一节）。
+     设计元素对应应用本身：深色圆角底 + 渐变闪电（⚡ Token 用量）
+     + 底部迷你进度条 + 右下角倒计时圆环。 -->
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 256px; height: 256px; background: transparent; overflow: hidden; }
+    .icon {
+        width: 256px; height: 256px;
+        border-radius: 58px;
+        background:
+            radial-gradient(120px 90px at 78% 18%, rgba(59,130,246,.45), transparent 70%),
+            radial-gradient(110px 90px at 18% 82%, rgba(168,85,247,.35), transparent 70%),
+            linear-gradient(160deg, #1d1e26 0%, #131318 100%);
+        position: relative;
+        box-shadow: inset 0 0 0 2px rgba(255,255,255,.07);
+    }
+    .bolt {
+        position: absolute; left: 50%; top: 44%;
+        width: 118px; height: 118px;
+        transform: translate(-50%, -50%);
+    }
+    .bars {
+        position: absolute; left: 44px; right: 44px; bottom: 40px;
+        display: flex; flex-direction: column; gap: 10px;
+    }
+    .bar {
+        height: 12px; border-radius: 6px;
+        background: rgba(255,255,255,.10);
+        overflow: hidden;
+    }
+    .bar i {
+        display: block; height: 100%; border-radius: 6px;
+    }
+    .bar .fill1 { width: 68%; background: linear-gradient(90deg,#3fb950,#2ea043); }
+    .bar .fill2 { width: 42%; background: linear-gradient(90deg,#3b82f6,#2563eb); }
+    .ring {
+        position: absolute; right: 34px; top: 34px;
+        width: 40px; height: 40px;
+    }
+</style>
+</head>
+<body>
+<div class="icon">
+    <svg class="bolt" viewBox="0 0 100 100">
+        <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#60a5fa"/>
+                <stop offset="1" stop-color="#a855f7"/>
+            </linearGradient>
+        </defs>
+        <path d="M60 2 L22 54 h22 l-8 44 L84 42 H60 Z"
+              fill="url(#g)" stroke="rgba(255,255,255,.25)" stroke-width="2"
+              stroke-linejoin="round"/>
+    </svg>
+    <div class="bars">
+        <div class="bar"><i class="fill1"></i></div>
+        <div class="bar"><i class="fill2"></i></div>
+    </div>
+    <svg class="ring" viewBox="0 0 40 40">
+        <circle cx="20" cy="20" r="15" fill="none"
+                stroke="rgba(255,255,255,.14)" stroke-width="5"/>
+        <circle cx="20" cy="20" r="15" fill="none"
+                stroke="#3b82f6" stroke-width="5" stroke-linecap="round"
+                stroke-dasharray="94.25" stroke-dashoffset="33"
+                transform="rotate(-90 20 20)"/>
+    </svg>
+</div>
+</body>
+</html>

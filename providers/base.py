@@ -23,6 +23,23 @@ def fmt_tokens(n) -> str:
     return str(int(n))
 
 
+def next_week_start() -> float:
+    """下周一 00:00 本地时间的 Unix 时间戳（自然周重置的估算锚点）。"""
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    monday = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return (monday + timedelta(days=7)).timestamp()
+
+
+def next_month_start() -> float:
+    """次月 1 号 00:00 本地时间的 Unix 时间戳（自然月重置的估算锚点）。"""
+    from datetime import datetime
+    now = datetime.now()
+    year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+    return datetime(year, month, 1).timestamp()
+
+
 @dataclass
 class UsageItem:
     """单个用量窗口。"""
@@ -46,17 +63,59 @@ class UsageData:
 class BaseProvider:
     """所有 provider 的基类。子类必须实现 fetch()。"""
 
+    # 站点提示：凭证提取失败时给用户的报错里用（"请打开 XX 并登录"）
+    SITE_NAME = ""
+
     def __init__(self, cfg: dict):
         self.cfg = cfg
 
     def fetch(self) -> UsageData:
         raise NotImplementedError
 
+    @staticmethod
+    def has_direct_credentials(cfg: dict) -> bool:
+        """是否已有可纯 HTTP 直连的凭证。
+
+        返回 True 时 fetch 优先走 HTTP（不开浏览器），CDP 预检也不拦截。
+        子类按各自凭证字段覆盖。
+        """
+        return False
+
+    @classmethod
+    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
+        """从 CDP Chrome 一次性提取登录凭证，返回可并入 cfg 的字段 dict。
+
+        抛出 CDPNotConnected / CDPPageNotFound / CDPEvalError。
+        """
+        from .cdp import CDPError
+        raise CDPError(f"{cls.__name__} 不支持凭证提取")
+
     # ---- 工具方法：构造 UsageData 时的常用错误 ----
     def _err(self, data: UsageData, msg: str) -> UsageData:
         data.status = "error"
         data.error = msg
         return data
+
+    @staticmethod
+    def _reset(data: UsageData) -> UsageData:
+        """HTTP 直连失败回退 CDP 前，清掉上一次写入的错误状态。"""
+        data.status = "ok"
+        data.error = ""
+        data.items.clear()
+        return data
+
+    def _fallback_cdp(self, data: UsageData, http_error: str,
+                      cdp_fetch) -> UsageData:
+        """直连失败后回退 CDP；CDP 也失败时返回直连的真实错误。
+
+        避免误导用户去开 Chrome——直连失败的真实原因（如凭证过期）
+        才是需要展示给用户的。仅当 CDP 确实兜底成功时才用 CDP 数据。
+        """
+        data = self._reset(data)
+        cdp_result = cdp_fetch(data)
+        if cdp_result.status == "error" and http_error:
+            return self._err(data, http_error)
+        return cdp_result
 
 
 # 浏览器 UA：模拟真实 Chrome，避开基础反爬

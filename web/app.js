@@ -11,7 +11,11 @@ const state = {
     onTop: true,
     refreshInterval: 60000,
     timer: null,
-    opacity: 0.92
+    opacity: 0.92,
+    theme: 'dark',
+    fitToken: 0,
+    dockMode: false,
+    dockHidden: false
 };
 
 const PANEL_WIDTH = 420;
@@ -21,6 +25,7 @@ const WINDOW_HEIGHT_PADDING = 0;
 // 颜色配置
 const BADGE_COLORS = {
     zhipu: { bg: '#3b82f6', text: '智' },
+    kimi: { bg: '#10b981', text: 'Ki' },
     opencode: { bg: '#a855f7', text: 'OC' },
     mimo: { bg: '#ff6900', text: 'Mi' },
     volcengine: { bg: '#e11d48', text: '火' }
@@ -40,17 +45,102 @@ function formatReset(note) {
 function shortUsageLabel(label) {
     const text = String(label || '').trim().toLowerCase();
     if (text.includes('5') || text.includes('rolling')) return '5h';
+    if (text.includes('7d') || text.includes('7天')) return '周';
     if (text.includes('week') || text.includes('周')) return '周';
     if (text.includes('month') || text.includes('月')) return '月';
     if (text.includes('mcp')) return 'MCP';
     return String(label || '').trim().slice(0, 3) || '用量';
 }
 
+// ---- 重置倒计时圆环 ----
+// 根据 label 推断窗口时长（秒），用于把 reset_at 换算成剩余比例
+function windowSecondsForLabel(label) {
+    const text = String(label || '').trim().toLowerCase();
+    if (text.includes('5') || text.includes('rolling')) return 5 * 3600;
+    if (text.includes('7d') || text.includes('7天') || text.includes('week') || text.includes('周')) return 7 * 86400;
+    if (text.includes('month') || text.includes('月')) return 30 * 86400;
+    return 0;
+}
+
+function formatResetCountdown(resetAt) {
+    const remain = Math.max(0, (Number(resetAt) || 0) - Date.now() / 1000);
+    if (remain <= 0) return '即将重置';
+    const d = Math.floor(remain / 86400);
+    const h = Math.floor((remain % 86400) / 3600);
+    const m = Math.ceil((remain % 3600) / 60);
+    if (d > 0) return `${d}天${h}小时后重置`;
+    if (h > 0) return `${h}小时${m}分后重置`;
+    return `${m}分钟后重置`;
+}
+
+const RESET_RING_C = 2 * Math.PI * 5;  // r=5 的周长
+
+function resetRingHTML(item) {
+    const resetAt = Number(item.reset_at) || 0;
+    if (!resetAt) return '';
+    const windowSec = windowSecondsForLabel(item.label);
+    if (!windowSec) return '';
+    const frac = Math.max(0, Math.min(1, (resetAt - Date.now() / 1000) / windowSec));
+    const offset = (RESET_RING_C * (1 - frac)).toFixed(2);
+    return `<span class="reset-ring" data-reset-at="${resetAt}" data-window="${windowSec}"
+                  title="${formatResetCountdown(resetAt)}">
+        <svg viewBox="0 0 14 14">
+            <circle class="ring-bg" cx="7" cy="7" r="5"></circle>
+            <circle class="ring-fg" cx="7" cy="7" r="5"
+                    stroke-dasharray="${RESET_RING_C.toFixed(3)}"
+                    stroke-dashoffset="${offset}"
+                    transform="rotate(-90 7 7)"></circle>
+        </svg>
+    </span>`;
+}
+
+// 每 30s 更新一次圆环，不重新请求数据
+function tickResetRings() {
+    const nowSec = Date.now() / 1000;
+    document.querySelectorAll('.reset-ring').forEach(el => {
+        const resetAt = Number(el.dataset.resetAt) || 0;
+        const windowSec = Number(el.dataset.window) || 0;
+        if (!resetAt || !windowSec) return;
+        const frac = Math.max(0, Math.min(1, (resetAt - nowSec) / windowSec));
+        const fg = el.querySelector('.ring-fg');
+        if (fg) fg.setAttribute('stroke-dashoffset', (RESET_RING_C * (1 - frac)).toFixed(2));
+        el.title = formatResetCountdown(resetAt);
+    });
+}
+
+/* 主题切换 —— 供 pywebview evaluate_js 调用 */
+function setTheme(theme) {
+    theme = theme === 'light' ? 'light' : 'dark';
+    state.theme = theme;
+    document.body.classList.remove('theme-dark', 'theme-light');
+    document.body.classList.add('theme-' + theme);
+}
+
+/* 根据所有 provider 的最低配额更新极光等级 */
+function updateAuroraTier(providers) {
+    const container = document.querySelector('.container');
+    if (!container) return;
+    container.classList.remove('quota-tier--healthy', 'quota-tier--caution', 'quota-tier--critical');
+
+    var minPercent = 100;
+    (providers || []).forEach(function(p) {
+        (p.items || []).forEach(function(item) {
+            var pct = Number(item.percent);
+            if (!isNaN(pct) && pct < minPercent) minPercent = pct;
+        });
+    });
+
+    if (minPercent >= 100) return;
+    if (minPercent >= 50) container.classList.add('quota-tier--healthy');
+    else if (minPercent >= 10) container.classList.add('quota-tier--caution');
+    else container.classList.add('quota-tier--critical');
+}
+
 function normalizedCompactItems(items) {
     const slots = [
-        { key: '5h', label: '5h', percent: 0 },
-        { key: 'week', label: '周', percent: 0 },
-        { key: 'month', label: '月', percent: 0 }
+        { key: '5h', label: '5h', percent: 0, reset_at: null },
+        { key: 'week', label: '周', percent: 0, reset_at: null },
+        { key: 'month', label: '月', percent: 0, reset_at: null }
     ];
     (items || []).forEach(item => {
         const shortLabel = shortUsageLabel(item.label);
@@ -63,6 +153,7 @@ function normalizedCompactItems(items) {
                     : null;
         if (slot) {
             slot.percent = Number(item.percent || 0);
+            slot.reset_at = item.reset_at || null;
         }
     });
     return slots;
@@ -89,7 +180,7 @@ function nativeWidthForCss(cssWidth) {
     if (state.topMode) {
         return 0;
     }
-    return Math.ceil(cssWidth);
+    return Math.round(cssWidth);
 }
 
 function measurePanelSize() {
@@ -115,10 +206,8 @@ function measurePanelSize() {
 
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
-    const summedHeight = titleHeight + cardsHeight + emptyHeight + loadingHeight;
-    const containerHeight = Math.ceil(container.scrollHeight || 0);
-    const height = Math.ceil(Math.max(summedHeight, containerHeight) + WINDOW_HEIGHT_PADDING);
-    const measuredWidth = Math.ceil(container.getBoundingClientRect().width || cssWidth);
+    const height = Math.ceil(titleHeight + cardsHeight + emptyHeight + loadingHeight + WINDOW_HEIGHT_PADDING);
+    const measuredWidth = Math.round(container.getBoundingClientRect().width || cssWidth);
     return {
         width: nativeWidthForCss(measuredWidth),
         height: Math.max(80, height)
@@ -190,6 +279,7 @@ function createCardHTML(provider) {
                             <div class="progress-fill ${itemColorClass}" 
                                  style="width: ${item.percent}%"></div>
                         </div>
+                        ${resetRingHTML(item)}
                         <span class="usage-percent ${itemColorClass}">${item.percent.toFixed(0)}%</span>
                     </div>
                     ${item.note ? `<div class="usage-note">${item.note}</div>` : ''}
@@ -235,6 +325,7 @@ function renderCards(providers) {
     providers.forEach(p => {
         state.cards[p.id] = p;
     });
+    updateAuroraTier(providers);
     scheduleWindowFit();
 }
 
@@ -243,6 +334,7 @@ function applyProviderUpdates(providers) {
         elements.container.innerHTML = '';
         state.cards = {};
         elements.emptyTip.style.display = 'block';
+        updateAuroraTier([]);
         scheduleWindowFit();
         return;
     }
@@ -261,6 +353,7 @@ function applyProviderUpdates(providers) {
             delete state.cards[id];
         }
     });
+    updateAuroraTier(providers);
 }
 
 // 更新单个卡片
@@ -387,7 +480,9 @@ async function toggleDock() {
         await window.pywebview.api.restore_window();
         state.topMode = false;
         state.topWidth = null;
+        state.manualWidth = null;
         document.body.classList.remove('top-mode');
+        await window.pywebview.api.set_top_mode(false);
         applyPanelWidth();
         scheduleWindowFit(80);
     }
@@ -609,6 +704,9 @@ async function init() {
     // 启动 auto-hide dock 行为监听
     setupDockAutoHide();
 
+    // 重置倒计时圆环每 30s 走一次（不重新请求数据）
+    setInterval(tickResetRings, 30000);
+
     // 加载配置
     if (window.pywebview && window.pywebview.api) {
         try {
@@ -623,6 +721,9 @@ async function init() {
             state.opacity = cfg.opacity || 0.92;
             applyWindowOpacity(state.opacity);
             await window.pywebview.api.set_top_mode(false);
+
+            // 主题
+            setTheme(cfg.theme || 'dark');
 
             // 设置模式
             document.body.classList.toggle('compact', state.compact);
@@ -640,9 +741,8 @@ async function init() {
         }
     }
 
-    // 首次刷新
-    await refresh();
-    scheduleWindowFit(80);
+    // 首次刷新（异步：窗口立即可见，数据到后 renderCards 内部自动 fit）
+    refresh();
 }
 
 // 等待 pywebview 就绪

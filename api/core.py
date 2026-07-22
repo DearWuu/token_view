@@ -31,28 +31,75 @@ class Api:
     # 数据相关
     # ===================================================================
 
+    @staticmethod
+    def _cdp_running(port: int = 9222) -> bool:
+        """快速检查 CDP Chrome 端口是否在监听（0.5s 超时）。"""
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            result = s.connect_ex(('127.0.0.1', port))
+            s.close()
+            return result == 0
+        except OSError:
+            return False
+
     def get_usage(self) -> list[dict]:
-        """获取所有 enabled provider 的最新用量（前端 ⇄ 状态文件 ⇄ companion 都用）。"""
-        results = []
-        for p in self.cfg.get("providers", []):
-            if not p.get("enabled"):
-                continue
+        """获取所有 enabled provider 的最新用量（线程池并行 fetch）。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        enabled = [p for p in self.cfg.get("providers", []) if p.get("enabled")]
+        if not enabled:
+            return []
+
+        cdp_ok: dict[int, bool] = {}
+
+        def fetch_one(p: dict) -> dict:
+            # CDP 快速预检：Chrome 没运行时直接返回错误，不等超时。
+            # 已提取直连凭证的 provider 走纯 HTTP，不依赖 CDP，跳过预检。
+            if p.get("cdp_enabled", False):
+                try:
+                    has_cred = provider_mod.provider_class(
+                        p.get("type")).has_direct_credentials(p)
+                except (ValueError, AttributeError):
+                    has_cred = False
+                if not has_cred:
+                    port = p.get("cdp_port", 9222)
+                    if port not in cdp_ok:
+                        cdp_ok[port] = self._cdp_running(port)
+                    if not cdp_ok[port]:
+                        return self._usage_to_dict(
+                            p, provider_mod.UsageData(
+                                provider_name=p.get("name") or p.get("type"),
+                                status="error",
+                                error="未提取凭证，请在设置页点「提取凭证」"))
             try:
                 data = provider_mod.build(p).fetch()
-                results.append(self._usage_to_dict(p, data))
+                return self._usage_to_dict(p, data)
             except Exception as e:  # noqa: BLE001
                 log(f"Provider {p.get('type')} 错误: {e}")
-                results.append(self._usage_to_dict(
+                return self._usage_to_dict(
                     p, provider_mod.UsageData(
                         provider_name=p.get("name") or p.get("type"),
-                        status="error", error=str(e))))
-        return results
+                        status="error", error=str(e)))
+
+        results: list = [None] * len(enabled)
+        max_workers = min(4, len(enabled))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            future_to_idx = {
+                ex.submit(fetch_one, p): i for i, p in enumerate(enabled)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+        return [r for r in results if r is not None]
 
     def get_config(self) -> dict:
         return {
             "providers": self.cfg.get("providers", []),
             "refresh_interval": self.cfg.get("refresh_interval", 60),
             "opacity": self.cfg.get("opacity", 0.92),
+            "theme": self.cfg.get("theme", "dark"),
             "compact": self.cfg.get("compact", False),
             "dock": self.cfg.get("dock", False),
             "always_on_top": self.cfg.get("always_on_top", True),
@@ -105,6 +152,38 @@ class Api:
     def get_provider(self, provider_id: str) -> Optional[dict]:
         return providers_api.get(self.cfg, provider_id)
 
+    def extract_provider_credentials(self, provider_id: str) -> dict:
+        """从 CDP Chrome 一次性提取登录凭证并保存。
+
+        提取成功后该 provider 日常刷新走纯 HTTP，不再依赖浏览器常开。
+        """
+        p = providers_api.get(self.cfg, provider_id)
+        if not p:
+            return {"success": False, "error": "账号不存在"}
+        try:
+            cls = provider_mod.provider_class(p.get("type"))
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+        try:
+            extracted = cls.extract_credentials(
+                port=int(p.get("cdp_port") or 9222),
+                cdp_url=p.get("cdp_url") or "")
+        except provider_mod.CDPNotConnected:
+            return {"success": False,
+                    "error": "连接失败：请先点「启动调试 Chrome」并登录"}
+        except provider_mod.CDPPageNotFound:
+            site = getattr(cls, "SITE_NAME", "") or "目标站点"
+            return {"success": False,
+                    "error": f"未找到页面：请在调试 Chrome 打开 {site} 并登录"}
+        except provider_mod.CDPError as e:
+            return {"success": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            log(f"提取凭证异常: {e}")
+            return {"success": False, "error": f"提取失败: {e}"}
+        providers_api.update(self.cfg, provider_id, extracted)
+        log(f"已提取 {p.get('type')} 凭证: {sorted(extracted.keys())}")
+        return {"success": True, "fields": sorted(extracted.keys())}
+
     # ===================================================================
     # CDP Chrome 启动
     # ===================================================================
@@ -145,6 +224,20 @@ class Api:
                 log(f"通知前端透明度失败: {e}")
         return True
 
+    def set_theme(self, theme: str) -> bool:
+        """切换主面板主题（dark / light），通知前端 CSS 变量切换。"""
+        theme = theme if theme in ("dark", "light") else "dark"
+        self.cfg["theme"] = theme
+        config.save(self.cfg)
+        if self.window is not None:
+            try:
+                self.window.evaluate_js(
+                    f"if(typeof setTheme==='function')setTheme('{theme}');"
+                )
+            except (OSError, RuntimeError) as e:
+                log(f"通知前端主题切换失败: {e}")
+        return True
+
     def set_geometry(self, x: int, y: int, w: int, h: int) -> bool:
         window_helper.save_geometry(self.cfg, x, y, w, h)
         return True
@@ -156,6 +249,8 @@ class Api:
         return screen_helper.screen_layout(self.window)
 
     def set_top_mode(self, enabled: bool) -> bool:
+        if not enabled:
+            self._top_mode_width = None
         settings_api.set_top_mode(enabled)
         return True
 
