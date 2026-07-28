@@ -12,7 +12,7 @@ const state = {
     refreshInterval: 60000,
     timer: null,
     opacity: 0.92,
-    theme: 'dark',
+    theme: 'light',
     fitToken: 0,
     dockMode: false,
     dockHidden: false
@@ -723,7 +723,7 @@ async function init() {
             await window.pywebview.api.set_top_mode(false);
 
             // 主题
-            setTheme(cfg.theme || 'dark');
+            setTheme(cfg.theme || 'light');
 
             // 设置模式
             document.body.classList.toggle('compact', state.compact);

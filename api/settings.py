@@ -67,16 +67,33 @@ def open_settings_window(js_api) -> bool:
 
     current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     settings_html = os.path.join(current_dir, "web", "settings.html")
+    icon_path = os.path.join(current_dir, "assets", "icon.ico")
+    if not os.path.exists(icon_path):
+        icon_path = None
 
-    _settings_window = webview.create_window(
-        "设置 - Token 用量监控",
-        settings_html,
-        js_api=js_api,
-        width=1200,
-        height=400,
-        resizable=True,
-        on_top=True,
-    )
+    try:
+        _settings_window = webview.create_window(
+            "设置 - Token 用量监控",
+            settings_html,
+            js_api=js_api,
+            width=1200,
+            height=700,
+            resizable=True,
+            on_top=True,
+            icon=icon_path,
+        )
+    except Exception:
+        # 带 icon 创建失败时，回退到不带 icon 重新创建
+        log("带图标创建设置窗口失败，回退到无图标模式")
+        _settings_window = webview.create_window(
+            "设置 - Token 用量监控",
+            settings_html,
+            js_api=js_api,
+            width=1200,
+            height=700,
+            resizable=True,
+            on_top=True,
+        )
     log("设置窗口已打开")
     return True
 

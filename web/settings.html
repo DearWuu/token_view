@@ -6,17 +6,17 @@
     <title>设置 - Token 用量监控</title>
     <style>
         :root {
-            --bg-primary: #1c1c20;
-            --bg-input: #2a2a30;
-            --bg-group: #232328;
-            --border-color: #3a3a42;
-            --border-group: #33333a;
-            --text-primary: #e6e6e6;
-            --text-secondary: #aaa;
-            --text-dim: #6e6e74;
-            --color-blue: #3b82f6;
-            --color-green: #3fb950;
-            --color-red: #f85149;
+            --bg-primary: #ebecf0;
+            --bg-input: #ffffff;
+            --bg-group: #f4f5f7;
+            --border-color: #d0d3da;
+            --border-group: #d8dbe1;
+            --text-primary: #1a1a2e;
+            --text-secondary: #4a4a5a;
+            --text-dim: #7a7a8a;
+            --color-blue: #2563eb;
+            --color-green: #2d8a3e;
+            --color-red: #d93636;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -108,12 +108,13 @@
         }
 
         .btn-secondary {
-            background: #2c2c33;
+            background: #e0e3e8;
             border: 1px solid var(--border-color);
+            color: var(--text-primary);
         }
 
         .btn-secondary:hover {
-            background: #383841;
+            background: #cdd1d8;
         }
 
         .btn-danger {
@@ -452,7 +453,7 @@
                 document.getElementById('refresh-interval').value = config.refresh_interval || 60;
                 document.getElementById('opacity').value = (config.opacity || 0.92) * 100;
                 document.getElementById('opacity-value').textContent = Math.round((config.opacity || 0.92) * 100) + '%';
-                document.getElementById('theme-select').value = config.theme || 'dark';
+                document.getElementById('theme-select').value = config.theme || 'light';
             }
         }
 
@@ -654,7 +655,7 @@
                     providers: config.providers || [],
                     refresh_interval: parseInt(document.getElementById('refresh-interval').value) || 60,
                     opacity: parseInt(document.getElementById('opacity').value) / 100 || 0.92,
-                    theme: document.getElementById('theme-select').value || 'dark'
+                    theme: document.getElementById('theme-select').value || 'light'
                 };
                 
                 await window.pywebview.api.save_config(updates);

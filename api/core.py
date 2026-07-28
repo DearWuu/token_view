@@ -99,7 +99,7 @@ class Api:
             "providers": self.cfg.get("providers", []),
             "refresh_interval": self.cfg.get("refresh_interval", 60),
             "opacity": self.cfg.get("opacity", 0.92),
-            "theme": self.cfg.get("theme", "dark"),
+            "theme": self.cfg.get("theme", "light"),
             "compact": self.cfg.get("compact", False),
             "dock": self.cfg.get("dock", False),
             "always_on_top": self.cfg.get("always_on_top", True),
