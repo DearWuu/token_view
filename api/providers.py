@@ -34,6 +34,11 @@ def remove(cfg: dict, provider_id: str) -> bool:
         cfg["providers"] = [p for p in providers_list
                             if p.get("id") != provider_id]
         config.save(cfg)
+    # 同步清理 state.json 里被删 provider 的条目（state 只在 fetch 时覆写，
+    # 否则旧条目会一直留着，让读 state 的工具以为 provider 还在）
+    from . import state as state_mod
+    known_ids = {p.get("id") for p in cfg.get("providers", []) if p.get("id")}
+    state_mod.prune_providers(known_ids)
     return True
 
 

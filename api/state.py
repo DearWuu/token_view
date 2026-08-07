@@ -67,3 +67,37 @@ def write_state(providers_data: list[dict]) -> Path:
     payload = build_payload(providers_data)
     write_atomic(path, payload)
     return path
+
+
+def read_state() -> dict:
+    """读已有 state.json；不存在或损坏返回空 dict（不抛异常）。"""
+    path = state_file_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def prune_providers(known_ids: set[str]) -> bool:
+    """清理 state.json 中 cfg 已不存在的 provider 条目。
+
+    被删 provider 的旧条目会一直留在 state.json（因为 state 只在 fetch 时被
+    整文件覆写，且新 fetch 列表里没有它）—— 这会让读 state 的 companion 工具
+    以为 provider 还在。启动和删除 provider 时各跑一次，确保 state 与 cfg 一致。
+
+    返回是否有改动（用于日志/避免无谓写盘）。
+    """
+    payload = read_state()
+    providers = payload.get("providers") or []
+    if not providers:
+        return False
+    kept = [p for p in providers if p.get("id") in known_ids]
+    if len(kept) == len(providers):
+        return False
+    payload["providers"] = kept
+    payload["ts"] = time.time()
+    payload["ts_iso"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    write_atomic(state_file_path(), payload)
+    return True
