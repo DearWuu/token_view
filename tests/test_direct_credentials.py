@@ -204,3 +204,99 @@ def test_kimi_fetch_http_missing_kimi_auth():
     data = KimiProvider(cfg)._fetch_http(UsageData(provider_name="k"))
     assert data.status == "error"
     assert "kimi-auth" in data.error
+
+
+# ---------------------------------------------------------------------------
+# kimi_team（团队空间）
+# ---------------------------------------------------------------------------
+
+def _jwt(exp):
+    """构造一个只有 exp 的假 JWT（payload 段 base64url，不验签）。"""
+    import base64 as b64
+    import json as _json
+    payload = b64.urlsafe_b64encode(
+        _json.dumps({"exp": exp}).encode()).rstrip(b"=").decode()
+    return f"header.{payload}.sig"
+
+
+def test_kimi_team_cred_requires_token():
+    cls = providers.provider_class("kimi_team")
+    cfg = config.new_provider("kimi_team")
+    assert not cls.has_direct_credentials(cfg)
+    cfg["refresh_token"] = "rt"
+    assert cls.has_direct_credentials(cfg)
+
+
+def test_kimi_team_factory_build():
+    p = providers.build(config.new_provider("kimi_team"))
+    assert p.cfg["type"] == "kimi_team"
+
+
+def test_kimi_team_refresh_called_when_access_expired(monkeypatch):
+    import time
+    from providers.kimi_team import KimiTeamProvider
+    cfg = config.new_provider("kimi_team")
+    cfg["access_token"] = _jwt(time.time() - 10)  # 已过期
+    cfg["refresh_token"] = "rt"
+    calls = []
+    monkeypatch.setattr(KimiTeamProvider, "_refresh_access_token",
+                        lambda self: calls.append("refresh") or "")
+    monkeypatch.setattr(KimiTeamProvider, "_fetch_stats_http",
+                        lambda self, d, retried=False: _ok_data())
+    data = KimiTeamProvider(cfg).fetch()
+    assert data.status == "ok"
+    assert calls == ["refresh"]
+
+
+def test_kimi_team_no_refresh_when_access_valid(monkeypatch):
+    import time
+    from providers.kimi_team import KimiTeamProvider
+    cfg = config.new_provider("kimi_team")
+    cfg["access_token"] = _jwt(time.time() + 3600)
+    calls = []
+    monkeypatch.setattr(KimiTeamProvider, "_refresh_access_token",
+                        lambda self: calls.append("refresh") or "不应调用")
+    monkeypatch.setattr(KimiTeamProvider, "_fetch_stats_http",
+                        lambda self, d, retried=False: _ok_data())
+    data = KimiTeamProvider(cfg).fetch()
+    assert data.status == "ok"
+    assert calls == []
+
+
+def test_kimi_team_refresh_failure_falls_back_to_cdp(monkeypatch):
+    from providers.kimi_team import KimiTeamProvider
+    cfg = config.new_provider("kimi_team")
+    cfg["refresh_token"] = ""  # 有直联凭证判定但 refresh 会失败
+    cfg["access_token"] = _jwt(0)
+    cfg["cdp_enabled"] = True
+    calls = []
+    monkeypatch.setattr(KimiTeamProvider, "_fetch_cdp",
+                        lambda self, d: (calls.append("cdp"), _ok_data())[1])
+    data = KimiTeamProvider(cfg).fetch()
+    assert calls == ["cdp"]
+    assert data.status == "ok"
+
+
+def test_kimi_team_parse_stats_response():
+    """团队版接口返回结构与个人版一致，复用父类解析。"""
+    import json
+    from providers.kimi_team import KimiTeamProvider
+    body = json.dumps({
+        "ratelimitCode5h": {"ratio": 0.3422, "enabled": True,
+                            "resetTime": "2026-08-07T12:35:01.680025833Z"},
+        "ratelimitCode7d": {"ratio": 0.0696, "enabled": True,
+                            "resetTime": "2026-08-14T07:35:01.680025833Z"},
+        "subscriptionBalance": {"amountUsedRatio": 0.0137,
+                                "expireTime": "2026-09-07T08:05:02.273935Z",
+                                "feature": "FEATURE_OMNI", "unit": "UNIT_CREDIT"},
+    })
+    wrapper = json.dumps({"status": 200, "statusText": "OK", "body": body})
+    data = UsageData(provider_name="k")
+    result = KimiTeamProvider({})._parse_json(wrapper, data)
+    assert result.status == "ok"
+    by_label = {i.label: i for i in result.items}
+    assert by_label["5h 窗口"].used_percent == 34.22
+    assert abs(by_label["7d 窗口"].used_percent - 6.96) < 1e-9
+    # 团队版"订阅额度"重命名为"本月窗口"（月度总额度，前端渲染 30 天圆环）
+    assert abs(by_label["本月窗口"].used_percent - 1.37) < 1e-9
+    assert by_label["本月窗口"].reset_at is not None

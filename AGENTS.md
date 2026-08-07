@@ -32,6 +32,7 @@ CDP 仅用于凭证提取和直连失败时的兜底。
 │   ├── base.py                #   BaseProvider / UsageData / UsageItem / fmt_tokens
 │   ├── cdp.py                 #   CDPHarness + CDP 异常类（三个 provider 共用）
 │   ├── zhipu.py               #   智谱 GLM（CDP/cookie/API key 三模式）
+│   ├── kimi_team.py           #   Kimi 团队空间（refresh_token 直连，继承 KimiProvider）
 │   ├── opencode.py            #   OpenCode Go（CDP 模式）
 │   ├── mimo.py                #   小米 MiMo（CDP 模式）
 │   └── __init__.py            #   build() 工厂 + 重导出
@@ -98,6 +99,13 @@ reset_at / note）。
   `_parse_usage_text` 三种形态正则都覆盖），无需执行 JS。
 - `KimiProvider`：直连用 `kimi-auth` cookie（JWT 约 28 天有效）POST 会员网关，
   headers 由 `_build_headers`（JWT payload 的 sub/device_id/ssid 注入）。
+- `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
+  团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
+  account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id）。
+  换取链路：CDP 从 localStorage 一次性提取 `access_token`/`refresh_token` →
+  过期时 POST `https://auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken`
+  `{"refreshToken":...}` 换新（返回新 refresh_token 会轮转，刷新后落盘 config）。
+  用量接口**不需要 Cookie 头**，裸 Bearer + `_build_headers` 即可（2026-08 实测）。
 - `MimoProvider`：直连用 cookie 调 `/api/v1/tokenPlan/usage`。
 - `VolcEngineProvider`：直连用 cookie + `csrfToken`（从 cookie 里取）POST
   GetAgentPlanAFPUsage（未实测，CDP 兜底）。

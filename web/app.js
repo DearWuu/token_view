@@ -12,7 +12,7 @@ const state = {
     refreshInterval: 60000,
     timer: null,
     opacity: 0.92,
-    theme: 'dark',
+    theme: 'light',
     fitToken: 0,
     dockMode: false,
     dockHidden: false
@@ -26,6 +26,7 @@ const WINDOW_HEIGHT_PADDING = 0;
 const BADGE_COLORS = {
     zhipu: { bg: '#3b82f6', text: '智' },
     kimi: { bg: '#10b981', text: 'Ki' },
+    kimi_team: { bg: '#0d9488', text: 'KT' },
     opencode: { bg: '#a855f7', text: 'OC' },
     mimo: { bg: '#ff6900', text: 'Mi' },
     volcengine: { bg: '#e11d48', text: '火' }
@@ -723,7 +724,7 @@ async function init() {
             await window.pywebview.api.set_top_mode(false);
 
             // 主题
-            setTheme(cfg.theme || 'dark');
+            setTheme(cfg.theme || 'light');
 
             // 设置模式
             document.body.classList.toggle('compact', state.compact);

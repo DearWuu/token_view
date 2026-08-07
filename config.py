@@ -23,7 +23,7 @@ DEFAULT: dict[str, Any] = {
     "refresh_interval": 15,   # 秒
     "opacity": 0.92,          # 悬浮窗透明度 0~1
     "always_on_top": True,
-    "theme": "dark",          # dark / light
+    "theme": "light",         # dark / light
     "geometry": None,         # [x, y, w, h]，记忆窗口位置
     "compact": False,         # 紧凑模式
     "dock": False,            # 顶部条模式
@@ -114,6 +114,16 @@ def new_provider(ptype: str) -> dict:
         base.update({
             "cookie": "",
             "name": "Kimi",
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
+    elif ptype == "kimi_team":
+        base.update({
+            # 团队空间：access_token 约 15 分钟有效，过期用 refresh_token 自动换
+            "access_token": "",
+            "refresh_token": "",
+            "name": "Kimi 团队",
             "cdp_enabled": True,
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",

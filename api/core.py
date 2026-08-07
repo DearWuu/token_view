@@ -26,6 +26,12 @@ class Api:
         self._lock = threading.Lock()
         self.window: Optional[Any] = None   # main.py 在启动后注入
         self._top_mode_width: Optional[int] = None  # 与 settings_api 共享运行时状态
+        # 启动时同步 state.json：清掉 cfg 里已不存在的 provider 条目，
+        # 兜底任何来源（删除/手动改 config）造成的 state 与 cfg 不一致
+        known_ids = {p.get("id") for p in self.cfg.get("providers", [])
+                     if p.get("id")}
+        if state.prune_providers(known_ids):
+            log("启动时清理了 state.json 中已删除的 provider 条目")
 
     # ===================================================================
     # 数据相关
@@ -99,7 +105,7 @@ class Api:
             "providers": self.cfg.get("providers", []),
             "refresh_interval": self.cfg.get("refresh_interval", 60),
             "opacity": self.cfg.get("opacity", 0.92),
-            "theme": self.cfg.get("theme", "dark"),
+            "theme": self.cfg.get("theme", "light"),
             "compact": self.cfg.get("compact", False),
             "dock": self.cfg.get("dock", False),
             "always_on_top": self.cfg.get("always_on_top", True),
