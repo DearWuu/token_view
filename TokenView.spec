@@ -43,6 +43,8 @@ hiddenimports = [
     'providers.base',
     'providers.cdp',
     'providers.zhipu',
+    'providers.kimi',
+    'providers.kimi_team',
     'providers.opencode',
     'providers.mimo',
     'api',

@@ -118,6 +118,16 @@ def new_provider(ptype: str) -> dict:
             "cdp_port": 9222,
             "cdp_url": "http://127.0.0.1:9222",
         })
+    elif ptype == "kimi_team":
+        base.update({
+            # 团队空间：access_token 约 15 分钟有效，过期用 refresh_token 自动换
+            "access_token": "",
+            "refresh_token": "",
+            "name": "Kimi 团队",
+            "cdp_enabled": True,
+            "cdp_port": 9222,
+            "cdp_url": "http://127.0.0.1:9222",
+        })
     elif ptype == "opencode":
         base.update({
             "cookie": "",

@@ -11,6 +11,7 @@
 支持的 type：
   - "zhipu"       智谱 GLM Coding Plan（凭证直连/CDP/API key 三模式）
   - "kimi"        Kimi 订阅额度（凭证直连/CDP）
+  - "kimi_team"   Kimi 团队空间（refresh_token 直连/CDP）
   - "opencode"    OpenCode Go（凭证直连/CDP）
   - "mimo"        小米 MiMo Token Plan（凭证直连/CDP）
   - "volcengine"  火山引擎 Ark Agent Plan（凭证直连/CDP）
@@ -25,6 +26,7 @@ from .base import (
 )
 from .cdp import CDPError, CDPEvalError, CDPNotConnected, CDPPageNotFound
 from .kimi import KimiProvider
+from .kimi_team import KimiTeamProvider
 from .opencode import OpenCodeProvider
 from .zhipu import ZhipuProvider
 from .mimo import MimoProvider
@@ -34,6 +36,7 @@ from .volcengine import VolcEngineProvider
 _CLASSES = {
     "zhipu": ZhipuProvider,
     "kimi": KimiProvider,
+    "kimi_team": KimiTeamProvider,
     "opencode": OpenCodeProvider,
     "mimo": MimoProvider,
     "volcengine": VolcEngineProvider,
@@ -64,6 +67,7 @@ __all__ = [
     "CDPPageNotFound",
     "ZhipuProvider",
     "KimiProvider",
+    "KimiTeamProvider",
     "OpenCodeProvider",
     "MimoProvider",
     "VolcEngineProvider",

@@ -26,6 +26,7 @@ const WINDOW_HEIGHT_PADDING = 0;
 const BADGE_COLORS = {
     zhipu: { bg: '#3b82f6', text: '智' },
     kimi: { bg: '#10b981', text: 'Ki' },
+    kimi_team: { bg: '#0d9488', text: 'KT' },
     opencode: { bg: '#a855f7', text: 'OC' },
     mimo: { bg: '#ff6900', text: 'Mi' },
     volcengine: { bg: '#e11d48', text: '火' }

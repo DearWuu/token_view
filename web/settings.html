@@ -226,6 +226,7 @@
         <div class="add-buttons">
             <button class="btn btn-small" onclick="addProvider('zhipu')">＋ 智谱</button>
             <button class="btn btn-small" onclick="addProvider('kimi')">＋ Kimi</button>
+            <button class="btn btn-small" onclick="addProvider('kimi_team')">＋ Kimi 团队</button>
             <button class="btn btn-small" onclick="addProvider('opencode')">＋ OpenCode</button>
             <button class="btn btn-small" onclick="addProvider('mimo')">＋ MiMo</button>
             <button class="btn btn-small" onclick="addProvider('volcengine')">＋ 火山</button>
@@ -302,6 +303,27 @@
                 <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
             </div>
             <div class="help-text" id="cred-status-kimi"></div>
+        </div>
+
+        <!-- Kimi 团队版特有字段 -->
+        <div id="kimi_team-fields" class="hidden">
+            <div class="form-group">
+                <label>Refresh Token</label>
+                <input type="password" id="edit-kimi-team-refresh-token" placeholder="点「提取凭证」自动填充，access_token 过期会自动换">
+            </div>
+            <div class="form-group checkbox-group">
+                <input type="checkbox" id="edit-kimi-team-cdp-enabled" checked>
+                <label for="edit-kimi-team-cdp-enabled" style="margin-bottom: 0;">启用 CDP</label>
+            </div>
+            <div class="form-group">
+                <label>CDP 端口</label>
+                <input type="number" id="edit-kimi-team-cdp-port" value="9222" min="1024" max="65535">
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="launchCdp('kimi_team')">🚀 启动调试 Chrome</button>
+                <button class="btn btn-small btn-secondary" onclick="extractCreds(this)">🔑 提取凭证</button>
+            </div>
+            <div class="help-text" id="cred-status-kimi_team"></div>
         </div>
 
         <!-- OpenCode 特有字段 -->
@@ -410,6 +432,7 @@
         function credStatus(p) {
             if (p.type === 'zhipu') return !!(p.auth_token && p.org_id && p.project_id);
             if (p.type === 'opencode') return !!(p.cookie && p.workspace_id);
+            if (p.type === 'kimi_team') return !!(p.refresh_token || p.access_token);
             return !!p.cookie;
         }
 
@@ -495,6 +518,7 @@
             // 隐藏所有特有字段
             document.getElementById('zhipu-fields').classList.add('hidden');
             document.getElementById('kimi-fields').classList.add('hidden');
+            document.getElementById('kimi_team-fields').classList.add('hidden');
             document.getElementById('opencode-fields').classList.add('hidden');
             document.getElementById('mimo-fields').classList.add('hidden');
             document.getElementById('volcengine-fields').classList.add('hidden');
@@ -513,6 +537,11 @@
                 document.getElementById('edit-kimi-cookie').value = provider.cookie || '';
                 document.getElementById('edit-kimi-cdp-enabled').checked = provider.cdp_enabled !== false;
                 document.getElementById('edit-kimi-cdp-port').value = provider.cdp_port || 9222;
+            } else if (provider.type === 'kimi_team') {
+                document.getElementById('kimi_team-fields').classList.remove('hidden');
+                document.getElementById('edit-kimi-team-refresh-token').value = provider.refresh_token || '';
+                document.getElementById('edit-kimi-team-cdp-enabled').checked = provider.cdp_enabled !== false;
+                document.getElementById('edit-kimi-team-cdp-port').value = provider.cdp_port || 9222;
             } else if (provider.type === 'opencode') {
                 document.getElementById('opencode-fields').classList.remove('hidden');
                 document.getElementById('edit-workspace').value = provider.workspace_id || '';
@@ -585,6 +614,14 @@
                 provider.cdp_enabled = document.getElementById('edit-kimi-cdp-enabled').checked;
                 provider.cdp_port = parseInt(document.getElementById('edit-kimi-cdp-port').value);
                 provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
+            } else if (provider.type === 'kimi_team') {
+                const rt = document.getElementById('edit-kimi-team-refresh-token').value.trim();
+                // refresh_token 被手动改过时清掉旧 access_token，强制下次刷新重换
+                if (rt !== (provider.refresh_token || '')) provider.access_token = '';
+                provider.refresh_token = rt;
+                provider.cdp_enabled = document.getElementById('edit-kimi-team-cdp-enabled').checked;
+                provider.cdp_port = parseInt(document.getElementById('edit-kimi-team-cdp-port').value);
+                provider.cdp_url = `http://127.0.0.1:${provider.cdp_port}`;
             } else if (provider.type === 'opencode') {
                 provider.workspace_id = document.getElementById('edit-workspace').value;
                 provider.cookie = document.getElementById('edit-cookie-o').value;
@@ -624,6 +661,9 @@
             } else if (type === 'kimi') {
                 port = parseInt(document.getElementById('edit-kimi-cdp-port').value);
                 url = 'https://www.kimi.com/code/console?from=kfc_overview_topbar';
+            } else if (type === 'kimi_team') {
+                port = parseInt(document.getElementById('edit-kimi-team-cdp-port').value);
+                url = 'https://www.kimi.com/membership/subscription?tab=quota';
             } else if (type === 'opencode') {
                 port = parseInt(document.getElementById('edit-oc-cdp-port').value);
                 url = 'https://opencode.ai';
