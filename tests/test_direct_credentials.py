@@ -30,14 +30,17 @@ def test_opencode_cred_requires_cookie_and_wsid():
     assert cls.has_direct_credentials(cfg)
 
 
-def test_kimi_cred_requires_kimi_auth_in_cookie():
+def test_kimi_cred_requires_token():
     cls = providers.provider_class("kimi")
     cfg = config.new_provider("kimi")
     assert not cls.has_direct_credentials(cfg)
-    cfg["cookie"] = "theme=light"
-    assert not cls.has_direct_credentials(cfg)
+    # 旧 cookie 模式（站点已弃用）仍认
     cfg["cookie"] = "theme=light; kimi-auth=tok123"
     assert cls.has_direct_credentials(cfg)
+    # 新 token 模式
+    cfg2 = config.new_provider("kimi")
+    cfg2["refresh_token"] = "rt"
+    assert cls.has_direct_credentials(cfg2)
 
 
 def test_mimo_volcengine_cred_only_needs_cookie():
@@ -197,11 +200,11 @@ def test_kimi_build_headers_injects_jwt_claims():
     assert "x-traffic-id" not in h2
 
 
-def test_kimi_fetch_http_missing_kimi_auth():
+def test_kimi_fetch_http_cookie_mode_requires_kimi_auth():
     from providers.kimi import KimiProvider
     cfg = config.new_provider("kimi")
     cfg["cookie"] = "theme=light"
-    data = KimiProvider(cfg)._fetch_http(UsageData(provider_name="k"))
+    data = KimiProvider(cfg)._fetch_http_cookie(UsageData(provider_name="k"))
     assert data.status == "error"
     assert "kimi-auth" in data.error
 

@@ -113,6 +113,10 @@ def new_provider(ptype: str) -> dict:
     elif ptype == "kimi":
         base.update({
             "cookie": "",
+            # 2026-08 改版：登录态在 localStorage 的 access_token/refresh_token，
+            # access_token 约 15 分钟有效，过期用 refresh_token 自动换
+            "access_token": "",
+            "refresh_token": "",
             "name": "Kimi",
             "cdp_enabled": True,
             "cdp_port": 9222,

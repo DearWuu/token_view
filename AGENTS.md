@@ -97,8 +97,10 @@ reset_at / note）。
 - `OpenCodeProvider`：直连用 `auth` cookie GET workspace 页面，用量由 SSR 以
   SolidJS `$R[n]={...usagePercent:0}` 序列化形态直接嵌在 HTML（key 无引号，
   `_parse_usage_text` 三种形态正则都覆盖），无需执行 JS。
-- `KimiProvider`：直连用 `kimi-auth` cookie（JWT 约 28 天有效）POST 会员网关，
-  headers 由 `_build_headers`（JWT payload 的 sub/device_id/ssid 注入）。
+- `KimiProvider`：2026-08 站点改版，登录态从 `kimi-auth` cookie（28 天）迁移到
+  localStorage 的 `access_token`/`refresh_token`（与团队版同一套 account 网关），
+  过期用 refresh_token 调 auth.kimi.com 换新（token 轮转，刷新后落盘 config）。
+  机制上个人版/团队版已统一，`KimiTeamProvider` 只剩展示层差异（referer/label）。
 - `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
   团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
   account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id）。
@@ -161,8 +163,9 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
    `Bigmodel-Project` 加进 fetch headers（这是反爬根因，不是 WAF/`acw_sc__v2`）
 3. 从 `document.cookie` 读 `bigmodel_token_production` 加裸 `Authorization` 头
    （**不加 `Bearer`**），`credentials:'include'` 还要带上其余 cookie
-4. `websocket.create_connection` 必须传 `origin="http://127.0.0.1:<port>"` 头，
-   否则 403（CDPHarness 自动处理）
+4. `websocket.create_connection` **必须 `suppress_origin=True`（不发 Origin 头）**。
+   坑史反转：Chrome ≤150 时代要带 `origin` 头否则 403；**Chrome 151 起 `--remote-allow-origins=*`
+   失效，带 Origin 头反而 403**，非浏览器客户端不发 Origin 即可（CDPHarness 已统一处理）
 
 解析逻辑（`providers.zhipu.ZhipuProvider._parse_team`）已对，别改：
 `data.rankList[]` 按 `customerId==cfg.customer_id` 匹配，取不到取第一名；
@@ -204,9 +207,11 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   无需 Cookie/UA/Referer，`acw_sc__v2` JS 挑战从未触发。
 - **取数优先级**：`ZhipuProvider.fetch` 中 `has_direct_credentials(cfg)`（auth_token + org_id
   + project_id 三件套）为 True 时优先纯 HTTP；失败（401/空 data）且 `cdp_enabled` 时
-  回退 CDP 兜底。CDP 仅用于凭证提取和兜底，不依赖浏览器常开。WebSocket 连接必须带
-  `origin: http://127.0.0.1:<port>` 头，否则 Chrome 返回 403 Forbidden
-  （`CDPHarness` 自动处理）。
+  回退 CDP 兜底。CDP 仅用于凭证提取和兜底，不依赖浏览器常开。WebSocket 连接
+  **不发 Origin 头**（`suppress_origin=True`，Chrome 151 起带 Origin 反而 403，
+  `CDPHarness` 已统一处理）。
+- **Kimi 控制台路由变更**：站点已把 `/code/console` 重定向到 `/code`（SPA 内部往返跳），
+  `KimiProvider.PAGE_KEYWORD` 已放宽为 `kimi.com/code`，别改回旧路径。
 - **WebView 必须在 GUI 线程**；cookie 抓取依赖用户登录态，无法离线/无头测试，
   必须真人登录。
 - **pywebview 文档陷阱**：部分 `Screen` 对象在不同版本是 dict/对象两种形态，

@@ -106,10 +106,12 @@ class CDPHarness:
             raise CDPNotConnected("缺少 websocket-client 依赖（pip install websocket-client）")
 
         try:
+            # Chrome 151+ 拒绝带 Origin 头的连接（--remote-allow-origins=* 已失效），
+            # 非浏览器客户端直接不发 Origin 头即可
             ws = ws_connect(
                 ws_url,
                 timeout=timeout or self._eval_timeout,
-                origin=self.origin,
+                suppress_origin=True,
             )
         except Exception as e:  # noqa: BLE001
             raise CDPNotConnected(f"WebSocket 连接失败: {e}") from e
@@ -157,7 +159,7 @@ class CDPHarness:
 
         t = timeout or self.DEFAULT_TIMEOUT
         try:
-            ws = ws_connect(ws_url, timeout=t, origin=self.origin)
+            ws = ws_connect(ws_url, timeout=t, suppress_origin=True)
         except Exception as e:  # noqa: BLE001
             raise CDPNotConnected(f"WebSocket 连接失败: {e}") from e
 
@@ -203,7 +205,7 @@ class CDPHarness:
 
         t = timeout or self._eval_timeout
         try:
-            ws = ws_connect(ws_url, timeout=t, origin=self.origin)
+            ws = ws_connect(ws_url, timeout=t, suppress_origin=True)
         except Exception as e:  # noqa: BLE001
             raise CDPNotConnected(f"WebSocket 连接失败: {e}") from e
 
