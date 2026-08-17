@@ -15,7 +15,8 @@ const state = {
     theme: 'light',
     fitToken: 0,
     dockMode: false,
-    dockHidden: false
+    dockHidden: false,
+    dockArmed: false
 };
 
 const PANEL_WIDTH = 420;
@@ -200,10 +201,15 @@ function measurePanelSize() {
     cards.style.maxHeight = 'none';
     cards.style.height = 'auto';
     cards.style.overflowY = 'visible';
+    // dock 模式 container 是 height:100vh，flex 会把 cards 拉伸到视口高，
+    // scrollHeight 被撑大形成"窗口越高量得越高"的反馈循环，一并解除
+    const prevContainerH = container.style.height;
+    container.style.height = 'auto';
     const cardsHeight = Math.ceil(cards.scrollHeight);
     cards.style.maxHeight = prevMaxHeight;
     cards.style.height = prevHeight;
     cards.style.overflowY = prevOverflow;
+    container.style.height = prevContainerH;
 
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
@@ -217,23 +223,27 @@ function measurePanelSize() {
 
 function fitWindowOnce(delay = 0, token = state.fitToken) {
     window.setTimeout(() => {
-        requestAnimationFrame(() => {
-            requestAnimationFrame(async () => {
-                if (token !== state.fitToken) {
-                    return;
-                }
-                if (!window.pywebview || !window.pywebview.api) {
-                    return;
-                }
-                const size = measurePanelSize();
-                await window.pywebview.api.resize_window_to_content(size.width, size.height);
-                // resize 后窗口真实高度变了，dock 隐藏的 y 坐标需要重新计算
-                // 否则 set_dock_hidden 用的是 fit 前的旧 h，会算错 y 导致完全隐藏
-                if (state.dockMode && state.dockHidden) {
-                    window.pywebview.api.set_dock_hidden(true);
-                }
-            });
-        });
+        (async () => {
+            if (token !== state.fitToken) {
+                return;
+            }
+            if (!window.pywebview || !window.pywebview.api) {
+                return;
+            }
+            // 强制同步 reflow 后测量：不用 rAF（窗口无焦点时 rAF 会被挂起，
+            // fit 永不执行导致高度停留在初始错误值）
+            void document.body.offsetHeight;
+            const size = measurePanelSize();
+            // dpr 必须传给后端：Chromium 渲染比例（1.875）与 GetDpiForWindow
+            // （1.5）可能不一致，后端自己猜会少乘文本缩放因子
+            await window.pywebview.api.resize_window_to_content(
+                size.width, size.height, window.devicePixelRatio || 0);
+            // resize 后窗口真实高度变了，dock 隐藏的 y 坐标需要重新计算
+            // 否则 set_dock_hidden 用的是 fit 前的旧 h，会算错 y 导致完全隐藏
+            if (state.dockMode && state.dockHidden) {
+                window.pywebview.api.set_dock_hidden(true);
+            }
+        })();
     }, delay);
 }
 
@@ -419,44 +429,46 @@ async function toggleCompact() {
     scheduleWindowFit();
 }
 
-// 放大并移动到当前屏幕顶部
+// 放大并移动到当前屏幕顶部。返回是否成功。
 async function moveToTop() {
-    if (window.pywebview && window.pywebview.api) {
-        state.topMode = true;
-        state.topWidth = null;
-        state.manualWidth = null;
-        state.widthScale = 1;
-        applyPanelWidth();
-        document.body.classList.add('top-mode');
+    if (!window.pywebview || !window.pywebview.api) return false;
+    state.topMode = true;
+    state.topWidth = null;
+    state.manualWidth = null;
+    state.widthScale = 1;
+    applyPanelWidth();
+    document.body.classList.add('top-mode');
 
-        // 等一帧让浏览器按 top-mode 布局 reflow 完再测量高度
-        await new Promise(r => requestAnimationFrame(r));
-        const size = measurePanelSize();
+    // 强制同步 reflow 再测量：窗口无焦点时 rAF 可能被节流挂起
+    // （实测 rAF 等待后 top-mode 样式未应用，量出卡片布局的错高度）
+    void document.body.offsetHeight;
+    const size = measurePanelSize();
 
-        // 顶部模式宽度固定，不随供应商数量变化（供应商上下堆叠，变的是高度）
-        const targetWidth = state.compact ? 620 : 2460;
-        const maxScreenW = window.screen.availWidth || 2000;
-        const clampedWidth = Math.min(targetWidth, maxScreenW);
+    // 顶部模式宽度固定，不随供应商数量变化（供应商上下堆叠，变的是高度）
+    const targetWidth = state.compact ? 620 : 2460;
+    const maxScreenW = window.screen.availWidth || 2000;
+    const clampedWidth = Math.min(targetWidth, maxScreenW);
 
-        const result = await window.pywebview.api.move_window_to_top(clampedWidth, size.height);
-        const ok = typeof result === 'object' ? result.ok : result;
-        elements.btnTop.classList.toggle('active', ok);
-        setTimeout(() => elements.btnTop.classList.remove('active'), 700);
-        if (ok) {
-            if (typeof result === 'object' && result.width) {
-                state.topWidth = result.width;
-                applyPanelWidth();
-            }
-            // 延迟等 WebView2 完成重布局
-            scheduleWindowFit(220);
-        } else {
-            state.topMode = false;
-            state.topWidth = null;
-            document.body.classList.remove('top-mode');
+        const result = await window.pywebview.api.move_window_to_top(
+            clampedWidth, size.height, window.devicePixelRatio || 0);
+    const ok = typeof result === 'object' ? result.ok : result;
+    elements.btnTop.classList.toggle('active', ok);
+    setTimeout(() => elements.btnTop.classList.remove('active'), 700);
+    if (ok) {
+        if (typeof result === 'object' && result.width) {
+            state.topWidth = result.width;
             applyPanelWidth();
-            scheduleWindowFit(80);
         }
+        // 延迟等 WebView2 完成重布局
+        scheduleWindowFit(220);
+        return true;
     }
+    state.topMode = false;
+    state.topWidth = null;
+    document.body.classList.remove('top-mode');
+    applyPanelWidth();
+    scheduleWindowFit(80);
+    return false;
 }
 
 // 切换 auto-hide dock 模式（替换原"顶部模式"按钮行为）
@@ -464,16 +476,39 @@ async function moveToTop() {
 // 关闭：窗口回到原位（恢复 pre-dock geometry）
 async function toggleDock() {
     if (!window.pywebview || !window.pywebview.api) return;
+    // 防重入：切换过程有多个 await，连点/双击会让两次 toggleDock 并发互踩
+    if (state.dockToggling) return;
+    state.dockToggling = true;
+    try {
+        await _toggleDockInner();
+    } finally {
+        state.dockToggling = false;
+    }
+}
+
+async function _toggleDockInner() {
     const willEnable = !state.dockMode;
     if (willEnable) {
-        await moveToTop();
-        state.dockMode = true;
+        // dock-mode 先加：行高/字号与 top-mode 不同，测量必须在最终布局下进行，
+        // 否则初始高度按大行高算小，后面的行被裁掉
         document.body.classList.add('dock-mode');
+        const ok = await moveToTop();
+        if (!ok) {
+            // moveToTop 失败已回滚 top-mode，这里同步回滚 dock-mode，
+            // 否则会卡进"半 dock"状态（样式是 dock、位置没动、auto-hide 乱触发）
+            document.body.classList.remove('dock-mode');
+            return;
+        }
+        state.dockMode = true;
+        state.dockArmed = false;   // 等鼠标首次进入窗口后才允许 auto-hide
         document.body.classList.remove('dock-hidden');  // 初始先显示
         elements.btnTop.classList.add('active');
+        // 3 秒宽限后才允许 auto-hide，让用户看到窗口已贴顶
+        setTimeout(() => { state.dockArmed = true; }, 3000);
         scheduleWindowFit(220);
     } else {
         state.dockMode = false;
+        state.dockArmed = false;
         document.body.classList.remove('dock-mode');
         document.body.classList.remove('dock-hidden');
         elements.btnTop.classList.remove('active');
@@ -493,11 +528,16 @@ async function toggleDock() {
 // （避免 WebView2 在 set_dock_hidden 改 y 后重派 mouseenter/mouseleave
 // 造成死循环）。
 // 物理位置通过 api.set_dock_hidden(true/false) 切，CSS 只负责 cursor 指示。
+// dockArmed 武装位：切 dock 后窗口飞到屏幕顶部，若立即 auto-hide 会
+// "点了窗口就消失"。曾尝试"鼠标首次进入窗口后才 armed"，但窗口飞上去
+// 可能正好盖住鼠标位置，WebView2 重派 mouseenter 导致提前 armed。
+// 改为固定宽限期：切 dock 后 3 秒内禁止隐藏（2026-08 实踩两轮）。
 const DOCK_HIDE_MARGIN = 20;  // 鼠标离开内容后多少像素内不触发隐藏
 function setupDockAutoHide() {
     let leaveTimer = null;
     const setHidden = (hidden) => {
         if (!state.dockMode) return;
+        if (hidden && !state.dockArmed) return;        // 宽限期内不允许隐藏
         if (state.dockHidden === hidden) return;       // 去重
         state.dockHidden = hidden;
         document.body.classList.toggle('dock-hidden', hidden);
@@ -644,9 +684,10 @@ function onResizeMove(e) {
     applyPanelWidth();
 
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.resize_window_to_content(newW, newH);
+        const dpr = window.devicePixelRatio || 0;
+        window.pywebview.api.resize_window_to_content(newW, newH, dpr);
         if (newX !== resizeState.startWinX || newY !== resizeState.startWinY) {
-            window.pywebview.api.move_window(newX, newY);
+            window.pywebview.api.move_window(newX, newY, dpr);
         }
     }
 }

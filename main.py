@@ -219,10 +219,14 @@ def main():
                     GWL_EXSTYLE = -20
                     WS_EX_TOOLWINDOW = 0x00000080
                     WS_EX_APPWINDOW = 0x00040000
+                    # 悬浮工具窗不抢焦点：不加 NOACTIVATE 时，窗口平时无焦点，
+                    # 第一次点击会被 Windows 吃掉用于激活窗口（click 到不了页面），
+                    # 表现为所有按钮都要点两次才生效
+                    WS_EX_NOACTIVATE = 0x08000000
                     user32 = ctypes.windll.user32
                     ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                    # 加 TOOLWINDOW，同时移除 APPWINDOW（两者互斥）
-                    new_style = (ex_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                    # 加 TOOLWINDOW + NOACTIVATE，同时移除 APPWINDOW（两者互斥）
+                    new_style = (ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
                     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
                     # 刷新窗口框架让样式生效
                     SWP_FRAMECHANGED = 0x0020
@@ -231,7 +235,7 @@ def main():
                     SWP_NOZORDER = 0x0004
                     user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
                                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
-                    log("窗口已设为 TOOLWINDOW（不在任务栏显示）")
+                    log("窗口已设为 TOOLWINDOW + NOACTIVATE（不在任务栏显示，点击不抢焦点）")
             except Exception as e:
                 log(f"设置 TOOLWINDOW 失败: {e}")
 

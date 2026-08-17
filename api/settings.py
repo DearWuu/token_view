@@ -113,13 +113,26 @@ _settings_window = None  # 持有 pywebview 窗口引用，防止 GC
 
 
 def open_settings_window(js_api) -> bool:
-    """打开 / 复用设置窗口。"""
+    """打开 / 复用设置窗口。
+
+    复用已有窗口避免每次重建 WebView2（冷启动白屏约 2 秒）。"""
     global _settings_window
     try:
         import webview
     except ImportError as e:
         log(f"打开设置窗口失败（pywebview 不可用）: {e}")
         return False
+
+    # 复用：窗口仍在则拉到前台显示，并刷新配置数据
+    if _settings_window is not None:
+        try:
+            _settings_window.show()
+            _settings_window.evaluate_js(
+                "typeof loadConfig === 'function' && loadConfig()")
+            log("设置窗口已复用")
+            return True
+        except Exception:  # noqa: BLE001  窗口已被销毁则重建
+            _settings_window = None
 
     current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     settings_html = os.path.join(current_dir, "web", "settings.html")
@@ -137,6 +150,16 @@ def open_settings_window(js_api) -> bool:
         on_top=True,
     )
     _set_window_icon(_settings_window, icon_path)
+
+    # 用户点 X 关掉后清引用，下次重新创建
+    def _on_closed():
+        global _settings_window
+        _settings_window = None
+
+    try:
+        _settings_window.events.closed += _on_closed
+    except (AttributeError, TypeError):
+        pass
     log("设置窗口已打开")
     return True
 

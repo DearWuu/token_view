@@ -260,25 +260,30 @@ class Api:
         settings_api.set_top_mode(enabled)
         return True
 
-    def resize_window_to_content(self, width: int, height: int) -> dict:
+    def resize_window_to_content(self, width: int, height: int,
+                                 dpr: float = 0) -> dict:
         return window_helper.resize_to_content(
-            self.window, self._top_mode_width, width, height)
+            self.window, self._top_mode_width, width, height, dpr=dpr)
 
     def resize_window(self, x: int = -1, y: int = -1,
-                      width: int = 0, height: int = 0) -> dict:
+                      width: int = 0, height: int = 0,
+                      dpr: float = 0) -> dict:
         """用户拖 8 方向 resize handle 时由前端调用，CSS 逻辑像素。
 
         x/y = -1 表示该方向不动；>=0 时连位置一起改（拖左/上/左上/左下 时）。
+        dpr：前端 devicePixelRatio，CSS→物理换算基准。
         """
         return window_helper.user_resize(
-            self.window, x, y, width, height)
+            self.window, x, y, width, height, dpr=dpr)
 
-    def move_window(self, x: int, y: int) -> bool:
-        """只改窗口位置，不改大小。"""
-        return window_helper.move_window(self.window, x, y)
+    def move_window(self, x: int, y: int, dpr: float = 0) -> bool:
+        """只改窗口位置，不改大小。dpr 为前端 devicePixelRatio。"""
+        return window_helper.move_window(self.window, x, y, dpr=dpr)
 
-    def move_window_to_top(self, width: int = 0, height: int = 0) -> dict:
-        result = window_helper.move_to_top(self.window, self.cfg, width, height)
+    def move_window_to_top(self, width: int = 0, height: int = 0,
+                           dpr: float = 0) -> dict:
+        result = window_helper.move_to_top(
+            self.window, self.cfg, width, height, dpr=dpr)
         if result.get("ok") and result.get("width"):
             self._top_mode_width = result["width"]
         return result

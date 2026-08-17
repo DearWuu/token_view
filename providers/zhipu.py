@@ -272,8 +272,14 @@ class ZhipuProvider(BaseProvider):
             j = r.json()
         except ValueError:
             return self._err(data, f"非 JSON 响应（HTTP {r.status_code}）")
-        if not j.get("success") or not j.get("data"):
+        if not j.get("success"):
             return self._err(data, j.get("msg") or "响应异常（凭证可能已失效）")
+        if not j.get("data"):
+            # success 但 data 为空（统计未生成/无用量）：不算错误，
+            # 否则每轮刷新都会误判失败空跑 CDP 兜底
+            data.status = "empty"
+            data.error = "暂无用量数据"
+            return data
         parse(j["data"], data)
         return data
 

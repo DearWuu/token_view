@@ -92,8 +92,12 @@ def get_geometry(cfg: dict):
 # --------------------- 按内容收缩窗口 ---------------------
 
 def resize_to_content(window, top_mode_width: int, css_width: int,
-                      css_height: int) -> dict:
-    """按前端报告的内容尺寸收缩窗口。返回 {"ok", "width", "height"}。"""
+                      css_height: int, dpr: float = 0) -> dict:
+    """按前端报告的内容尺寸收缩窗口。返回 {"ok", "width", "height"}。
+
+    dpr > 0 时用前端 devicePixelRatio 做 CSS→物理换算（比 GetDpiForWindow 准，
+    见 _resize_windows 注释）。
+    """
     if window is None:
         return {"ok": False}
 
@@ -102,7 +106,7 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
     css_height = max(80, min(1200, int(css_height)))
 
     layout = screen_helper.screen_layout(window)
-    scale = float(layout.get("scale", 1.0) or 1.0)
+    scale = float(dpr) if dpr and dpr > 0 else float(layout.get("scale", 1.0) or 1.0)
 
     # layout 是物理像素，JS 传来 CSS 逻辑像素，统一用 CSS 比较
     phys_w = max(260, int(layout.get("width", 1200)))
@@ -124,7 +128,7 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
     system = platform.system()
     if system == "Darwin" and _resize_macos(window, width, height, keep_width):
         return {"ok": True, "width": width, "height": height}
-    if system == "Windows" and _resize_windows(window, width, height):
+    if system == "Windows" and _resize_windows(window, width, height, dpr=dpr):
         return {"ok": True, "width": width, "height": height}
 
     # 兜底
@@ -141,8 +145,8 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
 
 # --------------------- 移动窗口（不改大小） ---------------------
 
-def move_window(window, x: int, y: int) -> bool:
-    """只改窗口位置，不改大小。CSS 逻辑像素。"""
+def move_window(window, x: int, y: int, dpr: float = 0) -> bool:
+    """只改窗口位置，不改大小。CSS 逻辑像素。dpr 见 _resize_windows。"""
     if window is None:
         return False
 
@@ -151,7 +155,8 @@ def move_window(window, x: int, y: int) -> bool:
         hwnd = screen_helper.window_hwnd(window)
         if hwnd:
             try:
-                scale = screen_helper.windows_dpi_scale(window)
+                scale = (dpr if dpr and dpr > 0
+                         else screen_helper.windows_dpi_scale(window))
                 user32 = ctypes.windll.user32
                 phys_x = int(x * scale)
                 phys_y = int(y * scale)
@@ -173,7 +178,8 @@ def move_window(window, x: int, y: int) -> bool:
         return False
 
 
-def user_resize(window, x: int = -1, y: int = -1, width: int = -1, height: int = -1) -> dict:
+def user_resize(window, x: int = -1, y: int = -1, width: int = -1,
+                height: int = -1, dpr: float = 0) -> dict:
     """用户拖 8 方向 resize handle 时由前端调用，参数是 CSS 逻辑像素。
 
     frameless 窗口没有 OS resize 边，前端 HTML 自绘 8 方向 handle 调这个。
@@ -192,7 +198,7 @@ def user_resize(window, x: int = -1, y: int = -1, width: int = -1, height: int =
     log(f"user_resize: x={x}, y={y}, w={width}, h={height}")
 
     system = platform.system()
-    if system == "Windows" and _resize_windows(window, width, height, x, y):
+    if system == "Windows" and _resize_windows(window, width, height, x, y, dpr=dpr):
         return {"ok": True, "width": width, "height": height}
 
     try:
@@ -232,10 +238,13 @@ def _resize_macos(window, width: int, height: int, keep_width: bool) -> bool:
 
 
 def _resize_windows(window, width: int, height: int,
-                    x: int = -1, y: int = -1) -> bool:
+                    x: int = -1, y: int = -1, dpr: float = 0) -> bool:
     """Win32 SetWindowPos 走物理像素，JS 传 CSS 逻辑像素。
 
     x/y = -1 表示保持当前位置。>=0 时物理像素换算后应用。
+    dpr > 0 时用前端 devicePixelRatio（Chromium 渲染比例），否则回退
+    GetDpiForWindow——两者可能不一致（实测 dpr=1.875 vs GetDpiForWindow=1.5，
+    文本缩放/WebView2 raster 不同步），以 dpr 为准。
     """
     try:
         user32 = ctypes.windll.user32
@@ -245,7 +254,7 @@ def _resize_windows(window, width: int, height: int,
     if not hwnd:
         return False
 
-    scale = screen_helper.windows_dpi_scale(window)
+    scale = dpr if dpr and dpr > 0 else screen_helper.windows_dpi_scale(window)
     phys_w = max(1, int(width * scale))
     phys_h = max(1, int(height * scale))
 
@@ -299,25 +308,45 @@ def _resize_windows(window, width: int, height: int,
 # --------------------- 移到屏幕顶部 ---------------------
 
 def _save_pre_dock_geometry(window, cfg: dict) -> None:
-    """进入 dock 前把当前窗口位置存到 cfg["pre_dock_geometry"]，退出时恢复。"""
-    if not cfg.get("pre_dock_geometry"):
-        try:
-            x = int(getattr(window, "x", 0) or 0)
-            y = int(getattr(window, "y", 0) or 0)
-            w = int(getattr(window, "width", 0) or 0)
-            h = int(getattr(window, "height", 0) or 0)
-            if w and h:
-                cfg["pre_dock_geometry"] = [x, y, w, h]
-                config.save(cfg)
-        except (OSError, AttributeError):
-            pass
+    """进入 dock 前把当前窗口位置存到 cfg["pre_dock_geometry"]，退出时恢复。
+
+    Windows 必须用 GetWindowRect 读真实物理坐标——pywebview 的 window.x/y
+    属性是创建时的值，不随后续 Win32 SetWindowPos 移动更新（实踩：退出
+    dock 后窗口跳到屏幕左缘）。
+
+    每次进入都重新保存（不是"为空才存"）：进程异常退出时残留的旧值会
+    自我延续（restore 后 pop 不到就一直用错的）。
+    """
+    try:
+        if platform.system() == "Windows":
+            hwnd = screen_helper.window_hwnd(window)
+            if hwnd:
+                rect = wintypes.RECT()
+                if ctypes.windll.user32.GetWindowRect(
+                        wintypes.HWND(hwnd), ctypes.byref(rect)):
+                    cfg["pre_dock_geometry"] = [
+                        int(rect.left), int(rect.top),
+                        int(rect.right - rect.left),
+                        int(rect.bottom - rect.top)]
+                    config.save(cfg)
+                    return
+        x = int(getattr(window, "x", 0) or 0)
+        y = int(getattr(window, "y", 0) or 0)
+        w = int(getattr(window, "width", 0) or 0)
+        h = int(getattr(window, "height", 0) or 0)
+        if w and h:
+            cfg["pre_dock_geometry"] = [x, y, w, h]
+            config.save(cfg)
+    except (OSError, AttributeError):
+        pass
 
 
-def move_to_top(window, cfg: dict, width: int = 0, height: int = 0) -> dict:
+def move_to_top(window, cfg: dict, width: int = 0, height: int = 0,
+                dpr: float = 0) -> dict:
     """把窗口放大并移到当前屏幕顶部。返回 {"ok", "width", "height", "mode"}。
 
-    width > 0 时用 JS 传入的宽度（根据供应商数量自适应），
-    width = 0 时回退到屏幕宽度 80%。
+    width > 0 时用 JS 传入的宽度（CSS 逻辑像素），width = 0 时回退屏幕 80%。
+    dpr：前端 devicePixelRatio，CSS→物理换算基准。
     """
     if window is None:
         return {"ok": False}
@@ -328,7 +357,7 @@ def move_to_top(window, cfg: dict, width: int = 0, height: int = 0) -> dict:
     if system == "Darwin":
         return _move_to_top_macos(window, cfg, height, width)
     if system == "Windows":
-        r = _move_to_top_windows(window, cfg, height, width)
+        r = _move_to_top_windows(window, cfg, height, width, dpr=dpr)
         if r.get("ok"):
             return r
 
@@ -385,7 +414,7 @@ def _move_to_top_macos(window, cfg: dict, height: int,
 
 
 def _move_to_top_windows(window, cfg: dict, height: int,
-                         requested_width: int = 0) -> dict:
+                         requested_width: int = 0, dpr: float = 0) -> dict:
     try:
         user32 = ctypes.windll.user32
     except OSError:
@@ -423,7 +452,8 @@ def _move_to_top_windows(window, cfg: dict, height: int,
     if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
         return {"ok": False}
 
-    scale = screen_helper.windows_dpi_scale(window)
+    scale = (dpr if dpr and dpr > 0
+             else screen_helper.windows_dpi_scale(window))
     work = info.rcWork
     sw = max(320, int(work.right - work.left))
     sh = max(120, int(work.bottom - work.top))
