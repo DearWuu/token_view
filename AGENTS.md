@@ -191,8 +191,21 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   前端倒计时圆环按 label 推断窗口时长（5h/7d/30d）算剩余比例，无 reset_at 不显示。
 - **pywebview 跨平台**：Windows 上 `transparent=True` 在高 DPI 下会被 WebView2 裁切，
   改成 `transparent=not is_windows`，CSS 用 `body.no-transparent` 兜底非透明背景。
-- **DPI 缩放**：JS 传来的尺寸是 CSS 逻辑像素，Win32 `SetWindowPos` 要物理像素，
-  用 `api.screen.windows_dpi_scale()` 换算。`api.window._resize_windows` 是参考实现。
+- **DPI 缩放**：JS 传来的尺寸是 CSS 逻辑像素，Win32 `SetWindowPos` 要物理像素。
+  **必须用前端 `devicePixelRatio` 换算，不能用 `GetDpiForWindow`**——实测两者
+  不一致（dpr=1.875 vs GetDpiForWindow=1.5，文本缩放/WebView2 raster 差异），
+  用错会导致所有 fit/移动换算少乘 1.25（2026-08 实踩：top 模式高度不够裁行、
+  宽度只占屏幕 80%）。前端在各 resize/move API 调用时传 `window.devicePixelRatio`，
+  后端 `dpr>0` 优先。`api.screen.windows_dpi_scale()` 仅作回退。
+- **卡片模式窗口收敛的隐藏依赖**：旧代码卡片宽度收敛（420→260）其实是
+  DPI 误算的副作用（每次 fit 窗口缩 0.8 直到 260 下限），dpr 修对后该
+  "意外收敛"消失——卡片宽度由 `--panel-width`（PANEL_WIDTH=420）恒定决定。
+- **measurePanelSize 反馈循环**：dock 模式 `container{height:100vh}` + flex 拉伸
+  会让 `cards.scrollHeight` 跟随视口高度（"窗口越高量得越高"）。测量时必须
+  同时解除 container 的 height（`style.height='auto'`）。
+- **窗口无焦点时 rAF 会被挂起**：fit/moveToTop 里的 `await requestAnimationFrame`
+  可能永不返回（CDP/无焦点场景实测），需要同步 reflow（`void body.offsetHeight`）
+  或 setTimeout 替代。
 - **macOS 主线程**：Cocoa `NSWindow.setFrame_` 必须在主线程，用
   `api.screen.run_on_macos_main_thread` 同步等。`quit_app` 走 `os._exit(0)`
   否则 Cocoa 事件循环不会退。
@@ -293,10 +306,16 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
 QQ 风格：启用顶部模式后，鼠标离开窗口 200ms 自动滑出（露 4px 缝），
 鼠标回顶部 4px 区域窗口滑下显示。实现：
 - 前端 `setupDockAutoHide`（web/app.js）：监听 mouseleave/mouseenter/mousemove
-- **dockArmed 武装位**：切 dock 后窗口飞到屏幕顶部，但鼠标还在原位置，
-  若立即 auto-hide 会"点了窗口就消失"（2026-08 实踩）。`toggleDock` 时
-  `dockArmed=false`，鼠标首次进入窗口（mouseenter/mousemove inContent）
-  后才 armed，未武装时 `setHidden(true)` 被挡
+- **dockArmed 宽限期**：切 dock 后窗口飞到屏幕顶部，若立即 auto-hide 会
+  "点了窗口就消失"。曾尝试"鼠标首次进入窗口才 armed"，但窗口可能正好盖住
+  鼠标位置、WebView2 重派 mouseenter 导致提前 armed。最终方案：固定 3 秒
+  宽限期（`setTimeout` 后置 `dockArmed=true`），宽限期内 `setHidden(true)` 被挡
+- **pre_dock_geometry 必须每次重存且用 GetWindowRect**：pywebview 的
+  `window.x/y` 属性不随 Win32 移动更新（存的是创建时的旧值）；"为空才存"
+  会让强杀残留的错误值自我延续
+- **toggleDock 防重入 + 失败回滚**：连点/双击会让两次切换并发互踩
+  （`state.dockToggling` 挡）；moveToTop 失败时 toggleDock 必须中止，
+  否则卡进"半 dock"状态（样式 dock、位置没动）
 - mouseleave 走 200ms 延迟（避免 WebView2 改 y 后重派 mouseenter/mouseleave 死循环）
 - mousemove 用 `e.screenY < 4`（**不是** `e.clientY`）判断"接近屏幕顶部"
 - 后端 `api.set_dock_hidden(true/false)` 调 Win32 SetWindowPos 物理移动 y

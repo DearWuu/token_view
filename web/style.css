@@ -217,8 +217,18 @@ body.top-mode:not(.compact) .usage-item {
 }
 
 body.top-mode:not(.compact) .usage-row {
-    grid-template-columns: minmax(74px, 0.7fr) minmax(120px, 1.5fr) auto minmax(40px, auto);
+    /* label/百分比按内容宽度，进度条弹性压缩——窗口变窄时压 bar 而不是
+       让 nowrap 文本溢出重叠（minmax 硬下限曾导致 label 与 percent 叠字） */
+    grid-template-columns: auto minmax(100px, 1fr) auto auto;
     gap: 7px;
+}
+
+body.top-mode:not(.compact) .usage-label {
+    /* overflow:hidden+ellipsis 的元素 intrinsic 宽度被算成 0，
+       会让 fit-content 测量把 label 列塌缩掉 */
+    overflow: visible;
+    text-overflow: unset;
+    min-width: max-content;
 }
 
 body.top-mode:not(.compact) .usage-note {
