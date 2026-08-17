@@ -163,9 +163,8 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
    `Bigmodel-Project` 加进 fetch headers（这是反爬根因，不是 WAF/`acw_sc__v2`）
 3. 从 `document.cookie` 读 `bigmodel_token_production` 加裸 `Authorization` 头
    （**不加 `Bearer`**），`credentials:'include'` 还要带上其余 cookie
-4. `websocket.create_connection` **必须 `suppress_origin=True`（不发 Origin 头）**。
-   坑史反转：Chrome ≤150 时代要带 `origin` 头否则 403；**Chrome 151 起 `--remote-allow-origins=*`
-   失效，带 Origin 头反而 403**，非浏览器客户端不发 Origin 即可（CDPHarness 已统一处理）
+4. `websocket.create_connection` 用 `suppress_origin=True`（不发 Origin 头），
+   对 Chrome（非浏览器客户端无 Origin 头放行）和抢占端口的 Electron 都兼容
 
 解析逻辑（`providers.zhipu.ZhipuProvider._parse_team`）已对，别改：
 `data.rankList[]` 按 `customerId==cfg.customer_id` 匹配，取不到取第一名；
@@ -208,8 +207,17 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
 - **取数优先级**：`ZhipuProvider.fetch` 中 `has_direct_credentials(cfg)`（auth_token + org_id
   + project_id 三件套）为 True 时优先纯 HTTP；失败（401/空 data）且 `cdp_enabled` 时
   回退 CDP 兜底。CDP 仅用于凭证提取和兜底，不依赖浏览器常开。WebSocket 连接
-  **不发 Origin 头**（`suppress_origin=True`，Chrome 151 起带 Origin 反而 403，
-  `CDPHarness` 已统一处理）。
+  用 `suppress_origin=True`（不发 Origin 头，Chrome 与抢占端口的 Electron 都兼容）。
+- **CDP 端口被抢占（2026-08 实踩）**：9222 是本机常用调试端口，**Electron 应用
+  （如本机"观智助手"）也会绑 127.0.0.1:9222**。此时真 Chrome 启动后 IPv4 被占会
+  退而只绑 `[::1]:9222`，而 Python requests 连 `127.0.0.1` 命中的是 Electron——
+  表现：CDP 403/"/json/new 500"/`Target.createTarget Not supported`/提取凭证打到
+  错误程序的页面。修法：`CDPHarness.find_page` 对 127.0.0.1 与 [::1] 两个候选
+  地址自适应；`launch_cdp_chrome` 启动后验证目标页面真的出现在调试端口上。
+  之前"Chrome 151 移除 --remote-allow-origins=*"是误诊（当时连的是 Electron）。
+- **设置页快照覆盖坑**：`saveProvider` 若把整个 provider 快照发回 `update_provider`，
+  快照里陈旧的 token 字段会覆盖后端刚提取/刷新的新 token（kimi 凭证曾因此"被清空"）。
+  现在 `saveProvider` 只提交用户编辑的字段，token 等后端管理字段不在表单里就不会被覆盖。
 - **Kimi 控制台路由变更**：站点已把 `/code/console` 重定向到 `/code`（SPA 内部往返跳），
   `KimiProvider.PAGE_KEYWORD` 已放宽为 `kimi.com/code`，别改回旧路径。
 - **WebView 必须在 GUI 线程**；cookie 抓取依赖用户登录态，无法离线/无头测试，
@@ -285,10 +293,20 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
 QQ 风格：启用顶部模式后，鼠标离开窗口 200ms 自动滑出（露 4px 缝），
 鼠标回顶部 4px 区域窗口滑下显示。实现：
 - 前端 `setupDockAutoHide`（web/app.js）：监听 mouseleave/mouseenter/mousemove
+- **dockArmed 武装位**：切 dock 后窗口飞到屏幕顶部，但鼠标还在原位置，
+  若立即 auto-hide 会"点了窗口就消失"（2026-08 实踩）。`toggleDock` 时
+  `dockArmed=false`，鼠标首次进入窗口（mouseenter/mousemove inContent）
+  后才 armed，未武装时 `setHidden(true)` 被挡
 - mouseleave 走 200ms 延迟（避免 WebView2 改 y 后重派 mouseenter/mouseleave 死循环）
 - mousemove 用 `e.screenY < 4`（**不是** `e.clientY`）判断"接近屏幕顶部"
 - 后端 `api.set_dock_hidden(true/false)` 调 Win32 SetWindowPos 物理移动 y
 - `fitWindowOnce` 完重设 dock hidden（fit 后 h 变了 y 算错）
+
+## 设置窗口复用
+
+`api/settings.py:open_settings_window` 复用已存在的设置窗口（`show()` +
+`evaluate_js(loadConfig())` 刷新数据），避免每次重建 WebView2 冷启动白屏约 2 秒。
+用户点 X 关闭时挂 `events.closed` 清引用，下次重新创建。
 
 ## 8 方向 resize handle
 

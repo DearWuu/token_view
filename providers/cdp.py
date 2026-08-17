@@ -67,33 +67,67 @@ class CDPHarness:
         """WebSocket 连接必须带的 Origin 头值。"""
         return f"http://127.0.0.1:{self._port}"
 
+    def _candidate_bases(self) -> list[str]:
+        """候选 CDP 地址列表。
+
+        真 Chrome 的调试端口可能被其他程序（如 Electron 应用）抢占 IPv4 回环，
+        此时 Chrome 会退而只绑 IPv6（[::1]），故 127.0.0.1 与 [::1] 都尝试。
+        """
+        url = self._cdp_url.rstrip("/")
+        bases = [url]
+        for host in ("127.0.0.1", "localhost"):
+            if f"://{host}:" in url:
+                bases.append(url.replace(f"://{host}:", "://[::1]:", 1))
+                break
+        return bases
+
     def find_page(self) -> dict:
         """GET /json 找到 type=='page' 且 url 含 self._keyword 的 target。
 
+        依次尝试 IPv4/IPv6 候选地址，命中后把 _cdp_url 固定为命中地址。
         抛出 CDPNotConnected / CDPPageNotFound。
         """
-        try:
-            r = requests.get(self._cdp_url + "/json", timeout=5)
-            r.raise_for_status()
-            targets = r.json()
-        except requests.RequestException as e:
-            raise CDPNotConnected(f"无法连接 {self._cdp_url}/json: {e}") from e
-        except ValueError as e:
-            raise CDPNotConnected(f"CDP 返回非 JSON（端口可能被占用）: {e}") from e
+        not_connected = None
+        page_not_found = None
+        for base in self._candidate_bases():
+            try:
+                r = requests.get(base + "/json", timeout=5)
+                r.raise_for_status()
+                targets = r.json()
+            except requests.RequestException as e:
+                not_connected = CDPNotConnected(f"无法连接 {base}/json: {e}")
+                continue
+            except ValueError as e:
+                not_connected = CDPNotConnected(
+                    f"CDP 返回非 JSON（端口可能被占用）: {e}")
+                continue
 
-        page = next(
-            (t for t in targets
-             if t.get("type") == "page"
-             and self._keyword in (t.get("url") or "")),
-            None,
-        )
-        if page is None:
+            page = next(
+                (t for t in targets
+                 if t.get("type") == "page"
+                 and self._keyword in (t.get("url") or "")),
+                None,
+            )
+            if page is None:
+                # 连上了但没有目标页面——可能是其他程序抢占了端口，继续试下一地址
+                page_not_found = CDPPageNotFound(
+                    f"未找到含 '{self._keyword}' 的标签页"
+                )
+                continue
+            if not page.get("webSocketDebuggerUrl"):
+                raise CDPNotConnected("CDP target 缺少 webSocketDebuggerUrl")
+            self._cdp_url = base
+            return page
+
+        # 全部候选地址失败：优先报"找不到页面"（能连但无目标页），否则报连接失败
+        if page_not_found is not None and not_connected is None:
+            raise page_not_found
+        if page_not_found is not None and not_connected is not None:
             raise CDPPageNotFound(
                 f"未找到含 '{self._keyword}' 的标签页"
+                f"（调试端口可能被其他程序如 Electron 抢占）"
             )
-        if not page.get("webSocketDebuggerUrl"):
-            raise CDPNotConnected("CDP target 缺少 webSocketDebuggerUrl")
-        return page
+        raise not_connected or CDPNotConnected("无法连接 CDP")
 
     def evaluate(self, ws_url: str, expression: str,
                  await_promise: bool = True, timeout: Optional[int] = None

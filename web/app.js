@@ -15,7 +15,8 @@ const state = {
     theme: 'light',
     fitToken: 0,
     dockMode: false,
-    dockHidden: false
+    dockHidden: false,
+    dockArmed: false
 };
 
 const PANEL_WIDTH = 420;
@@ -468,12 +469,14 @@ async function toggleDock() {
     if (willEnable) {
         await moveToTop();
         state.dockMode = true;
+        state.dockArmed = false;   // 等鼠标首次进入窗口后才允许 auto-hide
         document.body.classList.add('dock-mode');
         document.body.classList.remove('dock-hidden');  // 初始先显示
         elements.btnTop.classList.add('active');
         scheduleWindowFit(220);
     } else {
         state.dockMode = false;
+        state.dockArmed = false;
         document.body.classList.remove('dock-mode');
         document.body.classList.remove('dock-hidden');
         elements.btnTop.classList.remove('active');
@@ -493,11 +496,15 @@ async function toggleDock() {
 // （避免 WebView2 在 set_dock_hidden 改 y 后重派 mouseenter/mouseleave
 // 造成死循环）。
 // 物理位置通过 api.set_dock_hidden(true/false) 切，CSS 只负责 cursor 指示。
+// dockArmed 武装位：切 dock 后窗口飞到屏幕顶部，但用户鼠标还在原位置——
+// 若立即 auto-hide 窗口会"点了就消失"。必须先等鼠标进入过一次窗口
+// （armed=true）后才允许隐藏，符合 QQ 贴边的直觉。
 const DOCK_HIDE_MARGIN = 20;  // 鼠标离开内容后多少像素内不触发隐藏
 function setupDockAutoHide() {
     let leaveTimer = null;
     const setHidden = (hidden) => {
         if (!state.dockMode) return;
+        if (hidden && !state.dockArmed) return;        // 未武装不允许隐藏
         if (state.dockHidden === hidden) return;       // 去重
         state.dockHidden = hidden;
         document.body.classList.toggle('dock-hidden', hidden);
@@ -506,6 +513,7 @@ function setupDockAutoHide() {
         }
     };
     document.addEventListener('mouseenter', () => {
+        state.dockArmed = true;                        // 首次进入窗口后才武装
         if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
         setHidden(false);
     }, true);
@@ -525,7 +533,8 @@ function setupDockAutoHide() {
                       && cy >= -DOCK_HIDE_MARGIN && cy <= h + DOCK_HIDE_MARGIN;
 
         if (inContent) {
-            // 鼠标在窗口内，取消隐藏定时
+            // 鼠标在窗口内，取消隐藏定时（并武装——4px 缝状态下 mouseenter 不一定触发）
+            state.dockArmed = true;
             if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
             setHidden(false);
         } else if (inMargin) {
