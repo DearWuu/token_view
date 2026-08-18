@@ -11,32 +11,13 @@ import config
 from logger import log
 
 
-# 顶层模式：仅运行时记忆，不入 config（避免和 JS 端重复状态）
-_top_mode_width: Optional[int] = None
-
-
 def set_top_mode(enabled: bool) -> bool:
-    """进入 / 退出顶部条模式。清掉 _top_mode_width 让窗口从内容重新算。"""
-    global _top_mode_width
-    if not enabled:
-        _top_mode_width = None
+    """进入 / 退出顶部条模式（运行态由 api/core 的实例属性管理）。"""
     return True
-
-
-def top_mode_width() -> Optional[int]:
-    return _top_mode_width
 
 
 def set_compact(cfg: dict, compact: bool) -> bool:
-    global _top_mode_width
-    _top_mode_width = None
     cfg["compact"] = compact
-    config.save(cfg)
-    return True
-
-
-def set_dock(cfg: dict, dock: bool) -> bool:
-    cfg["dock"] = dock
     config.save(cfg)
     return True
 

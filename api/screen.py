@@ -235,7 +235,21 @@ def top_bar_geometry(screen, height: int) -> tuple:
 
 
 def current_window_width(window, default: int = 260) -> int:
-    """读取窗口真实宽度，macOS 原生 frame 优先。"""
+    """读取窗口真实宽度（物理像素）。
+
+    Windows 用 GetWindowRect——pywebview 的 window.width 属性是创建时
+    快照，不随 Win32 SetWindowPos 移动更新。
+    """
+    if platform.system() == "Windows":
+        hwnd = window_hwnd(window)
+        if hwnd:
+            try:
+                rect = wintypes.RECT()
+                if ctypes.windll.user32.GetWindowRect(
+                        wintypes.HWND(hwnd), ctypes.byref(rect)):
+                    return max(default, int(rect.right - rect.left))
+            except OSError:
+                pass
     try:
         native = getattr(window, "native", None)
         if native is not None:

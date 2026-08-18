@@ -5,13 +5,17 @@
 """
 from __future__ import annotations
 
-import threading
 from typing import Optional
 
 import config
 
-
-_lock = threading.Lock()
+# 后端管理字段：不允许被 updates 里的空值覆盖——前端快照回传时这些字段
+# 是页面加载时的旧值/空值，直接合并会擦掉后台刚刷新/提取的凭证
+# （saveProvider 曾整快照回传擦掉 kimi token；saveAll 也犯过）。
+# 注意：extract_provider_credentials 写入的是非空新凭证，不受影响；
+# 用户要重置凭证走「提取凭证」或删除账号重建。
+_PROTECTED_FIELDS = ("access_token", "refresh_token", "auth_token",
+                     "org_id", "project_id", "cookie", "api_key")
 
 
 def list_providers(cfg: dict) -> list[dict]:
@@ -20,7 +24,7 @@ def list_providers(cfg: dict) -> list[dict]:
 
 def add(cfg: dict, ptype: str) -> dict:
     new_p = config.new_provider(ptype)
-    with _lock:
+    with config.io_lock:
         providers_list = cfg.get("providers", [])
         providers_list.append(new_p)
         cfg["providers"] = providers_list
@@ -29,7 +33,7 @@ def add(cfg: dict, ptype: str) -> dict:
 
 
 def remove(cfg: dict, provider_id: str) -> bool:
-    with _lock:
+    with config.io_lock:
         providers_list = cfg.get("providers", [])
         cfg["providers"] = [p for p in providers_list
                             if p.get("id") != provider_id]
@@ -45,11 +49,15 @@ def remove(cfg: dict, provider_id: str) -> bool:
 def update(cfg: dict, provider_id: str, updates: dict) -> bool:
     if not updates:
         return True
-    with _lock:
+    with config.io_lock:
         providers_list = cfg.get("providers", [])
         for p in providers_list:
             if p.get("id") == provider_id:
-                p.update(updates)
+                for k, v in updates.items():
+                    # 凭证字段拒绝空值覆盖（快照擦除防线）
+                    if k in _PROTECTED_FIELDS and not v and p.get(k):
+                        continue
+                    p[k] = v
                 break
         cfg["providers"] = providers_list
         config.save(cfg)
