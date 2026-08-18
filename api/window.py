@@ -117,7 +117,7 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
     max_h = screen_h_css
 
     if top_mode_width:
-        width = int(top_mode_width)
+        width = int(top_mode_width) if keep_width else max(260, css_width)
     elif keep_width:
         width = int(top_mode_width or screen_helper.current_window_width(window))
     else:
@@ -126,6 +126,13 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
     height = max(80, min(css_height, max_h))
 
     system = platform.system()
+    if system == "Windows" and top_mode_width:
+        # top 模式宽度变化时窗口要重新水平居中贴顶（否则切简单/复杂
+        # 后窗口缩放了但 x 不动，横条偏左/偏右）
+        hwnd = screen_helper.window_hwnd(window)
+        if hwnd and _resize_windows_top_center(
+                window, hwnd, layout, width, height, scale):
+            return {"ok": True, "width": width, "height": height}
     if system == "Darwin" and _resize_macos(window, width, height, keep_width):
         return {"ok": True, "width": width, "height": height}
     if system == "Windows" and _resize_windows(window, width, height, dpr=dpr):
@@ -234,6 +241,32 @@ def _resize_macos(window, width: int, height: int, keep_width: bool) -> bool:
         return True
     except (OSError, TimeoutError) as e:
         log(f"macOS 按内容缩放失败: {e}")
+        return False
+
+
+def _resize_windows_top_center(window, hwnd, layout: dict,
+                                css_w: int, css_h: int, scale: float) -> bool:
+    """top 模式专用：SetWindowPos 改尺寸的同时把窗口重新水平居中贴顶。
+
+    layout 是当前屏幕的物理像素布局（x/y/width/height）。
+    """
+    try:
+        user32 = ctypes.windll.user32
+        sw = int(layout.get("width", 1920))
+        left = int(layout.get("x", 0))
+        top = int(layout.get("y", 0))
+        phys_w = max(1, int(css_w * scale))
+        phys_h = max(1, int(css_h * scale))
+        phys_x = left + max(0, (sw - phys_w) // 2)
+        user32.SetWindowPos(
+            wintypes.HWND(hwnd),
+            wintypes.HWND(-1),      # HWND_TOPMOST
+            phys_x, top, phys_w, phys_h,
+            0x0010,                 # SWP_NOACTIVATE
+        )
+        return True
+    except OSError as e:
+        log(f"top 模式居中缩放失败: {e}")
         return False
 
 
