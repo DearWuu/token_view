@@ -140,6 +140,28 @@ class Api:
     # Provider CRUD
     # ===================================================================
 
+    def log_js(self, msg: str) -> bool:
+        """前端诊断日志通道：排查"点击没反应"时区分事件是否到达页面。"""
+        log(f"[JS] {msg}")
+        return True
+
+    def get_cursor_pos(self) -> dict:
+        """返回鼠标物理像素坐标 {x, y}（GetCursorPos）。
+
+        前端宽限期结束时主动判断鼠标是否已在窗口外——鼠标静止时没有任何
+        mouse 事件，auto-hide 不会触发（用户反馈"要点一下框里才隐藏"）。
+        """
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                pt = wintypes.POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                return {"x": int(pt.x), "y": int(pt.y)}
+            except OSError:
+                pass
+        return {"x": -1, "y": -1}
+
     def add_provider(self, ptype: str) -> dict:
         new_p = providers_api.add(self.cfg, ptype)
         log(f"已添加 {ptype} provider")
@@ -301,7 +323,8 @@ class Api:
     # ===================================================================
 
     def set_compact(self, compact: bool) -> bool:
-        self._top_mode_width = None
+        # 不再清 _top_mode_width：前端 fit 已全权决定宽度，
+        # 清了反而丢 top 模式标志导致 fit 后窗口不重新居中
         return settings_api.set_compact(self.cfg, compact)
 
     def set_dock(self, dock: bool) -> bool:
