@@ -139,13 +139,7 @@ def resize_to_content(window, top_mode_width: int, css_width: int,
         return {"ok": True, "width": width, "height": height}
 
     # 兜底
-    x = int(getattr(window, "x", 0) or 0)
-    y = int(getattr(window, "y", 0) or 0)
     window.resize(width, height)
-    cfg_path = getattr(window, "_token_view_cfg", None)
-    if cfg_path is not None:
-        cfg_path["geometry"] = [x, y, width, height]
-        config.save(cfg_path)
     log(f"窗口已按内容缩放: w={width}, h={height}")
     return {"ok": True, "width": width, "height": height}
 
@@ -210,12 +204,6 @@ def user_resize(window, x: int = -1, y: int = -1, width: int = -1,
 
     try:
         window.resize(width, height)
-        cfg = getattr(window, "_token_view_cfg", None)
-        if cfg is not None:
-            cx = int(getattr(window, "x", 0) or 0)
-            cy = int(getattr(window, "y", 0) or 0)
-            cfg["geometry"] = [cx, cy, width, height]
-            config.save(cfg)
         return {"ok": True, "width": width, "height": height}
     except (OSError, RuntimeError) as e:
         log(f"user_resize 失败: {e}")
@@ -329,10 +317,6 @@ def _resize_windows(window, width: int, height: int,
     )
     if not ok:
         return False
-    cfg = getattr(window, "_token_view_cfg", None)
-    if cfg is not None:
-        cfg["geometry"] = [int(rect.left), int(rect.top), width, height]
-        config.save(cfg)
     log(f"Windows 窗口已按内容缩放: w={width}, h={height} "
         f"(phys={phys_w}x{phys_h}, scale={scale:.2f})")
     return True
@@ -562,17 +546,37 @@ def _move_to_top_pywebview(window, cfg: dict, height: int,
     return {"ok": True, "width": w, "height": h, "mode": "top"}
 
 
+def _default_geometry(window) -> list:
+    """默认窗口几何（物理像素）：屏幕右下角 630x720。"""
+    w, h, margin = 630, 720, 120
+    if platform.system() == "Windows" and screen_helper.window_hwnd(window):
+        try:
+            rect = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(
+                    0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+                return [int(rect.right) - w - margin,
+                        int(rect.bottom) - h - margin, w, h]
+        except OSError:
+            pass
+    return [100, 100, w, h]
+
+
 def restore_from_dock(window, cfg: dict) -> dict:
-    """退出 auto-hide dock 时把窗口恢复到 pre_dock_geometry。"""
+    """退出 auto-hide dock 时把窗口恢复到 pre_dock_geometry。
+
+    pre 缺失/非法（异常退出残留已清、从未进过 dock）时回退到屏幕右下角
+    默认位，而不是报错把窗口留在屏幕顶部（用户曾因此找不到窗口）。
+    """
     if window is None:
         return {"ok": False, "error": "no window"}
     pre = cfg.get("pre_dock_geometry")
     if not pre or len(pre) != 4:
-        return {"ok": False, "error": "no pre_dock_geometry"}
+        log("pre_dock_geometry 缺失，退出 dock 恢复到默认位置")
+        pre = _default_geometry(window)
     x, y, w, h = [int(v) for v in pre]
     if w < 260 or h < 80:
-        return {"ok": False, "error": "invalid pre geometry"}
-
+        log("pre_dock_geometry 非法，退出 dock 恢复到默认位置")
+        x, y, w, h = _default_geometry(window)
     system = platform.system()
     if system == "Windows" and screen_helper.window_hwnd(window):
         try:
@@ -639,10 +643,17 @@ def set_dock_hidden(window, hidden: bool) -> dict:
             log(f"set_dock_hidden Win32 失败: {e}")
             return {"ok": False, "error": str(e)}
     else:
-        # macOS / Linux 兜底
+        # macOS / Linux 兜底：用原生 frame 读真实位置（pywebview 的
+        # window.x/height 属性是创建时快照，不随移动更新）
         try:
-            h = int(getattr(window, "height", 0) or 0)
-            x = int(getattr(window, "x", 0) or 0)
+            native = getattr(window, "native", None)
+            if native is not None:
+                frame = native.frame()
+                x = int(frame.origin.x)
+                h = int(frame.size.height)
+            else:
+                x = int(getattr(window, "x", 0) or 0)
+                h = int(getattr(window, "height", 0) or 0)
             new_y = (4 - h) if hidden else 0
             window.move(x, new_y)
             return {"ok": True, "y": new_y, "hidden": hidden}

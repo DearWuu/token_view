@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import platform
-import threading
 from typing import Any, Optional
 
 import config
@@ -23,9 +22,8 @@ class Api:
 
     def __init__(self):
         self.cfg = config.load()
-        self._lock = threading.Lock()
         self.window: Optional[Any] = None   # main.py 在启动后注入
-        self._top_mode_width: Optional[int] = None  # 与 settings_api 共享运行时状态
+        self._top_mode_width: Optional[int] = None  # top 模式标志（fit 时居中用）
         # 启动时同步 state.json：清掉 cfg 里已不存在的 provider 条目，
         # 兜底任何来源（删除/手动改 config）造成的 state 与 cfg 不一致
         known_ids = {p.get("id") for p in self.cfg.get("providers", [])
@@ -116,7 +114,7 @@ class Api:
 
     def save_config(self, updates: dict) -> bool:
         try:
-            with self._lock:
+            with config.io_lock:
                 self.cfg.update(updates)
                 config.save(self.cfg)
             if "opacity" in updates:
@@ -266,10 +264,6 @@ class Api:
                 log(f"通知前端主题切换失败: {e}")
         return True
 
-    def set_geometry(self, x: int, y: int, w: int, h: int) -> bool:
-        window_helper.save_geometry(self.cfg, x, y, w, h)
-        return True
-
     def get_geometry(self):
         return window_helper.get_geometry(self.cfg)
 
@@ -326,9 +320,6 @@ class Api:
         # 不再清 _top_mode_width：前端 fit 已全权决定宽度，
         # 清了反而丢 top 模式标志导致 fit 后窗口不重新居中
         return settings_api.set_compact(self.cfg, compact)
-
-    def set_dock(self, dock: bool) -> bool:
-        return settings_api.set_dock(self.cfg, dock)
 
     def set_refresh_interval(self, seconds: int) -> bool:
         return settings_api.set_refresh_interval(self.cfg, seconds)

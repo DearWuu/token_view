@@ -108,9 +108,20 @@ def main():
     # cfg 里如果之前存过 geometry，优先用
     saved_geom = cfg.get('geometry') if isinstance(cfg.get('geometry'), list) else None
     if saved_geom and len(saved_geom) == 4:
-        init_x, init_y, init_w, init_h = saved_geom
-        init_w = max(260, int(init_w or 420))
-        init_h = max(80, int(init_h or 400))
+        # geometry 统一存物理像素（window.py 各写入点），消费时换算回 CSS
+        scale = 1.0
+        if is_windows:
+            try:
+                import ctypes
+                dpi = ctypes.windll.user32.GetDpiForSystem()
+                if dpi > 0:
+                    scale = dpi / 96.0
+            except OSError:
+                pass
+        init_x = int(saved_geom[0] / scale)
+        init_y = int(saved_geom[1] / scale)
+        init_w = max(260, int(saved_geom[2] / scale))
+        init_h = max(80, int(saved_geom[3] / scale))
     else:
         init_w, init_h = 420, 400
         margin = 80
@@ -179,10 +190,11 @@ def main():
     def on_closed():
         try:
             compact = window.evaluate_js('state.compact') or False
-            dock = window.evaluate_js('state.dock') or False
-            cfg['compact'] = compact
-            cfg['dock'] = dock
-            config.save(cfg)
+            # 必须从磁盘读最新配置再改——main 的 cfg 是启动时的快照，
+            # 直接 save 会把运行期变更（新 token/新 provider/geometry）全部覆盖
+            latest = config.load()
+            latest['compact'] = compact
+            config.save(latest)
         except Exception as e:
             log(f"保存配置失败: {e}")
     

@@ -4,7 +4,6 @@
 const state = {
     cards: {},
     compact: false,
-    dock: false,
     topMode: false,
     manualWidth: null,
     onTop: true,
@@ -431,7 +430,6 @@ async function toggleCompact() {
     // top-mode 布局摘掉，dock 布局直接崩坏（2026-08 实踩）
     state.compact = !state.compact;
     state.manualWidth = null;
-    state.widthScale = 1;
     document.body.classList.toggle('compact', state.compact);
     applyPanelWidth();
     elements.btnMode.classList.toggle('active', state.compact);
@@ -454,7 +452,6 @@ async function moveToTop() {
     if (!window.pywebview || !window.pywebview.api) return false;
     state.topMode = true;
     state.manualWidth = null;
-    state.widthScale = 1;
     applyPanelWidth();
     document.body.classList.add('top-mode');
 
@@ -541,6 +538,7 @@ async function _toggleDockInner() {
     } else {
         state.dockMode = false;
         state.dockArmed = false;
+        state.dockHidden = false;   // 不重置会在重进 dock 后被 setHidden 去重吞掉 auto-hide
         document.body.classList.remove('dock-mode');
         document.body.classList.remove('dock-hidden');
         elements.btnTop.classList.remove('active');
@@ -562,7 +560,7 @@ async function _toggleDockInner() {
 // dockArmed 武装位：切 dock 后窗口飞到屏幕顶部，若立即 auto-hide 会
 // "点了窗口就消失"。曾尝试"鼠标首次进入窗口后才 armed"，但窗口飞上去
 // 可能正好盖住鼠标位置，WebView2 重派 mouseenter 导致提前 armed。
-// 改为固定宽限期：切 dock 后 3 秒内禁止隐藏（2026-08 实踩两轮）。
+// 改为固定宽限期：切 dock 后 2 秒内禁止隐藏（2026-08 实踩两轮）。
 const DOCK_HIDE_MARGIN = 20;  // 鼠标离开内容后多少像素内不触发隐藏
 function setupDockAutoHide() {
     let leaveTimer = null;
@@ -703,6 +701,12 @@ function startResize(e, dir) {
 
 function onResizeMove(e) {
     if (!resizeState.dragging) return;
+    // mouseup 丢失兜底：鼠标在 WebView 外松开/事件被吞时 buttons 已归零，
+    // 立即结束拖拽，否则 dragging 卡死导致 auto-hide 检测永久失效
+    if (e.buttons === 0) {
+        onResizeEnd();
+        return;
+    }
     const dx = e.screenX - resizeState.startX;
     const dy = e.screenY - resizeState.startY;
     const d = resizeState.dir;

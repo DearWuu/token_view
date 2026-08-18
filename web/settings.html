@@ -700,8 +700,9 @@
             }
             
             try {
+                // 不回传 providers——那是页面加载时的快照，后台刷新的 token、
+                // 新提取的凭证会被旧快照覆盖（与 saveProvider 只提交编辑字段同理）
                 const updates = {
-                    providers: config.providers || [],
                     refresh_interval: parseInt(document.getElementById('refresh-interval').value) || 60,
                     opacity: parseInt(document.getElementById('opacity').value) / 100 || 0.92,
                     theme: document.getElementById('theme-select').value || 'light'

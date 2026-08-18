@@ -132,24 +132,34 @@ class KimiProvider(BaseProvider):
         self.cfg["access_token"] = at
         if j.get("refreshToken"):
             self.cfg["refresh_token"] = j["refreshToken"]
-        self._persist_tokens()
+        self._persist_tokens(old_rt=rt)
         log("Kimi access_token 已刷新")
         return ""
 
-    def _persist_tokens(self) -> None:
-        """刷新后的 token 落盘（access_token 只有约 15 分钟，重启后要能接着刷）。"""
+    def _persist_tokens(self, old_rt: str = "") -> None:
+        """刷新后的 token 落盘（access_token 只有约 15 分钟，重启后要能接着刷）。
+
+        持 config.io_lock 完成读-改-写，避免与其他写路径（增删 provider、
+        设置保存）在窗口期互相覆盖。
+        同时把新 token 同步给共享同一份 refresh_token 的 kimi 系 provider
+        （个人版/团队版共用 localStorage 同一对 token，不同步会互踢）。
+        """
         try:
-            cfg = config.load()
-            for p in cfg.get("providers", []):
-                if p.get("id") == self.cfg.get("id"):
-                    p["access_token"] = self.cfg.get("access_token", "")
-                    p["refresh_token"] = self.cfg.get("refresh_token", "")
-                    break
-            config.save(cfg)
+            with config.io_lock:
+                cfg = config.load()
+                for p in cfg.get("providers", []):
+                    if p.get("type") not in ("kimi", "kimi_team"):
+                        continue
+                    if p.get("id") == self.cfg.get("id") or \
+                            (old_rt and p.get("refresh_token") == old_rt):
+                        p["access_token"] = self.cfg.get("access_token", "")
+                        p["refresh_token"] = self.cfg.get("refresh_token", "")
+                config.save(cfg)
         except OSError as e:
             log(f"Kimi token 落盘失败: {e}")
 
     def _fetch_http(self, data: UsageData) -> UsageData:
+        self._reload_tokens()
         if self.cfg.get("access_token") or self.cfg.get("refresh_token"):
             if not self._access_token_valid():
                 err = self._refresh_access_token()
@@ -158,6 +168,25 @@ class KimiProvider(BaseProvider):
             return self._fetch_stats_http(data, retried=False)
         # 旧 cookie 模式（站点已弃用）
         return self._fetch_http_cookie(data)
+
+    def _reload_tokens(self) -> None:
+        """从磁盘同步最新 token。
+
+        kimi 个人版/团队版共用 localStorage 里同一对 token，任一 provider
+        刷新都会轮转 refresh_token 并落盘——另一个 provider 内存里的旧 rt
+        会被服务端作废（互踢 401 循环的根因）。fetch 前 reload 保证手上
+        永远是最新的。
+        """
+        try:
+            with config.io_lock:
+                cfg = config.load()
+            for p in cfg.get("providers", []):
+                if p.get("id") == self.cfg.get("id"):
+                    self.cfg["access_token"] = p.get("access_token", "")
+                    self.cfg["refresh_token"] = p.get("refresh_token", "")
+                    break
+        except OSError:
+            pass
 
     def _fetch_stats_http(self, data: UsageData, retried: bool) -> UsageData:
         token = self.cfg["access_token"].strip()
