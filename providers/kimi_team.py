@@ -2,7 +2,7 @@
 
 与个人版（kimi.py）的区别：团队空间的用量接口要求 account 网关签发的
 短期 access token（iss=account，约 15 分钟有效，payload 带 business_id），
-而不是 kimi-auth cookie 那个 user-center JWT。
+而不是个人版的登录态。token 直连/刷新链路在父类 KimiProvider 实现。
 
 取数方式（按优先级）：
   1. 凭证直连（推荐）：localStorage 里的 access_token / refresh_token 提取后，
@@ -20,12 +20,9 @@ from __future__ import annotations
 import json
 import time
 
-import requests
-
-import config
 from logger import log
 
-from .base import UsageData, BROWSER_UA
+from .base import UsageData
 from .cdp import CDPHarness, CDPError
 from .kimi import KimiProvider
 
@@ -35,8 +32,6 @@ class KimiTeamProvider(KimiProvider):
 
     PAGE_KEYWORD = "kimi.com"
     SITE_NAME = "www.kimi.com（团队空间）"
-    REFRESH_URL = ("https://auth.kimi.com/api/"
-                   "account.gateway.v1.AuthService/RefreshToken")
     STATS_REFERER = "https://www.kimi.com/membership/subscription?tab=quota"
 
     def fetch(self) -> UsageData:
@@ -87,83 +82,6 @@ class KimiTeamProvider(KimiProvider):
             "access_token": tokens.get("at") or "",
             "refresh_token": tokens["rt"],
         }
-
-    def _access_token_valid(self) -> bool:
-        exp = self._decode_jwt_payload(
-            self.cfg.get("access_token") or "").get("exp") or 0
-        return exp - time.time() > 60
-
-    def _refresh_access_token(self) -> str:
-        """用 refresh_token 换新 access_token，成功返回 ""，失败返回错误信息。"""
-        rt = (self.cfg.get("refresh_token") or "").strip()
-        if not rt:
-            return "缺少 refresh_token（请在设置里重新「提取凭证」）"
-        try:
-            r = requests.post(
-                self.REFRESH_URL,
-                headers={"Content-Type": "application/json",
-                         "connect-protocol-version": "1",
-                         "User-Agent": BROWSER_UA},
-                json={"refreshToken": rt}, timeout=20)
-        except requests.RequestException as e:
-            return f"刷新 token 网络错误: {e}"
-        if r.status_code != 200:
-            return f"刷新 token 失败 HTTP {r.status_code}: {r.text[:200]}"
-        try:
-            j = json.loads(r.text)
-        except ValueError:
-            return f"刷新 token 返回非 JSON: {r.text[:200]}"
-        at = j.get("accessToken") or ""
-        if not at:
-            return f"刷新 token 返回无 accessToken: {r.text[:200]}"
-        self.cfg["access_token"] = at
-        if j.get("refreshToken"):
-            self.cfg["refresh_token"] = j["refreshToken"]
-        self._persist_tokens()
-        log("Kimi 团队 access_token 已刷新")
-        return ""
-
-    def _persist_tokens(self) -> None:
-        """刷新后的 token 落盘（access_token 只有 15 分钟，重启后要能接着刷）。"""
-        try:
-            cfg = config.load()
-            for p in cfg.get("providers", []):
-                if p.get("id") == self.cfg.get("id"):
-                    p["access_token"] = self.cfg.get("access_token", "")
-                    p["refresh_token"] = self.cfg.get("refresh_token", "")
-                    break
-            config.save(cfg)
-        except OSError as e:
-            log(f"Kimi 团队 token 落盘失败: {e}")
-
-    def _fetch_http(self, data: UsageData) -> UsageData:
-        if not self._access_token_valid():
-            err = self._refresh_access_token()
-            if err:
-                return self._err(data, err)
-        return self._fetch_stats_http(data, retried=False)
-
-    def _fetch_stats_http(self, data: UsageData, retried: bool) -> UsageData:
-        token = self.cfg["access_token"].strip()
-        payload = self._decode_jwt_payload(token)
-        headers = self._build_headers(token, payload)
-        headers["User-Agent"] = BROWSER_UA
-        headers["Origin"] = "https://www.kimi.com"
-        headers["Referer"] = self.STATS_REFERER
-        try:
-            r = requests.post("https://www.kimi.com" + self.API_PATH,
-                              headers=headers, json={}, timeout=20)
-        except requests.RequestException as e:
-            return self._err(data, f"网络错误: {e}")
-        # 401 时刷新一次 token 重试（access_token 可能提前失效）
-        if r.status_code == 401 and not retried:
-            err = self._refresh_access_token()
-            if err:
-                return self._err(data, err)
-            return self._fetch_stats_http(data, retried=True)
-        wrapper = json.dumps({
-            "status": r.status_code, "statusText": r.reason, "body": r.text})
-        return self._parse_json(wrapper, data)
 
     # ---- CDP 模式 ----
 

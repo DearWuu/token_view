@@ -113,6 +113,9 @@ def new_provider(ptype: str) -> dict:
     elif ptype == "kimi":
         base.update({
             "cookie": "",
+            # 新登录流程（2026-11 起）：localStorage token，不再种 kimi-auth cookie
+            "access_token": "",
+            "refresh_token": "",
             "name": "Kimi",
             "cdp_enabled": True,
             "cdp_port": 9222,

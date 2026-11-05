@@ -382,8 +382,9 @@ async function refresh() {
 
     try {
         // 只重新请求 provider 数据，回来后按卡片局部更新，不做整窗重绘。
+        // collect_and_persist：取数同时写 state.json（companion 工具读这个文件）
         if (window.pywebview && window.pywebview.api) {
-            const providers = await window.pywebview.api.get_usage();
+            const providers = await window.pywebview.api.collect_and_persist();
             if (hasCards) {
                 applyProviderUpdates(providers);
             } else {

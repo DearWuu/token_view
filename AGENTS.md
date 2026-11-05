@@ -14,7 +14,7 @@ CDP 仅用于凭证提取和直连失败时的兜底。
 - 启动：`python -X utf8 main.py`（Windows 控制台必须加 `-X utf8`，否则中文乱码）
 - 依赖：`pywebview` / `requests` / `websocket-client` / `pillow` / `pystray`（requirements.txt）。
   本机已装；缺则跑 `pip install -r requirements.txt`
-- 测试：`pytest tests/`（14 个用例，凭证判定/fetch 路由/解析，无 GUI）
+- 测试：`pytest tests/`（29 个用例，凭证判定/fetch 路由/解析，无 GUI）
 - 打包：`pyinstaller TokenView.spec --clean --noconfirm` → `dist/TokenView.exe`（22MB）
 - 验证：跑 `main.py` 看效果 + 看 `%APPDATA%/token_view/debug.log`
 
@@ -53,7 +53,7 @@ CDP 仅用于凭证提取和直连失败时的兜底。
 │   ├── style.css              #   主题 + 顶部模式 + 假透明度 CSS 变量
 │   └── settings.html          #   设置页
 │
-├── tests/                     # pytest 单元测试（27 个用例）
+├── tests/                     # pytest 单元测试（29 个用例）
 │   ├── conftest.py
 │   ├── test_base.py           # 数据模型 + 工厂
 │   ├── test_state.py          # state.json 协议
@@ -94,14 +94,24 @@ reset_at / note）。
 - `ZhipuProvider`：直连用 `auth_token`(JWT，无 exp 长期有效) + `org_id` +
   `project_id` 三个凭证调 `/api/monitor/usage/sub-account-rank`。Authorization
   **不加 `Bearer`** 前缀。API Key 模式（个人版）保留。
+  **普通成员降级**（2026-11 实测）：`sub-account-rank` 仅企业主账号可访问，
+  普通成员返回 `{"code":500,"msg":"仅企业主账号可访问成员排行榜"}`；此时自动
+  降级 `quota/limit?type=2` 的 `limits[]`（浏览器"我的用量"页同源接口，
+  percentage/nextResetTime 一次拿齐，与个人版 `_parse_limits(team=True)` 同构），
+  `plan_level` 显示 `团队·MAX`（level 字段）。CDP 兜底路径同样降级。
 - `OpenCodeProvider`：直连用 `auth` cookie GET workspace 页面，用量由 SSR 以
   SolidJS `$R[n]={...usagePercent:0}` 序列化形态直接嵌在 HTML（key 无引号，
   `_parse_usage_text` 三种形态正则都覆盖），无需执行 JS。
-- `KimiProvider`：直连用 `kimi-auth` cookie（JWT 约 28 天有效）POST 会员网关，
-  headers 由 `_build_headers`（JWT payload 的 sub/device_id/ssid 注入）。
-- `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
+- `KimiProvider`：**新登录流程（2026-11 实测）不再种 `kimi-auth` cookie**，
+  改用 localStorage `access_token`/`refresh_token`（iss=account，约 15 分钟有效，
+  与团队空间同机制，token 链路 `_refresh_access_token`/`_fetch_stats_http`
+  在本类实现，kimi_team 继承复用）。直连优先 token，旧 `kimi-auth` cookie
+  （28 天 JWT）路径保留兼容；headers 由 `_build_headers`（JWT payload 的
+  sub/device_id/ssid 注入）。CDP 兜底同样读 localStorage token。
+- `KimiTeamProvider`（继承 KimiProvider，token 链路与 `_parse_json` 复用父类）：
   团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
-  account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id）。
+  account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id；
+  个人版 token 无 business_id，同一接口按 token 自动返回对应空间数据）。
   换取链路：CDP 从 localStorage 一次性提取 `access_token`/`refresh_token` →
   过期时 POST `https://auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken`
   `{"refreshToken":...}` 换新（返回新 refresh_token 会轮转，刷新后落盘 config）。
