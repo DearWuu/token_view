@@ -1,29 +1,16 @@
 """Kimi 团队版（团队空间）订阅额度 Provider。
 
-与个人版（kimi.py）的区别：团队空间的用量接口要求 account 网关签发的
-短期 access token（iss=account，约 15 分钟有效，payload 带 business_id），
-而不是个人版的登录态。token 直连/刷新链路在父类 KimiProvider 实现。
+与个人版（kimi.py）的区别只剩展示层：
+  - STATS_REFERER 指向团队订阅页
+  - plan_level 显示「团队版」
+  - 订阅额度 label 改为「本月窗口」（团队空间按月循环）
 
-取数方式（按优先级）：
-  1. 凭证直连（推荐）：localStorage 里的 access_token / refresh_token 提取后，
-     access_token 过期就用 refresh_token 调 auth.kimi.com 换新，纯 HTTP 不开浏览器
-  2. CDP 兜底：连接已登录调试 Chrome，页面内读 localStorage access_token 后 fetch
-
-接口：
-  POST https://auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken
-      {"refreshToken": "..."} -> {"accessToken": "...", "refreshToken": "..."}
-  POST https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats
-      （与个人版同一接口，Bearer 换成团队 access token 即返回团队空间数据）
+取数机制 2026-08 起与个人版完全一致（账号网关 access_token/refresh_token，
+localStorage 提取 + auth.kimi.com 刷新），实现全部继承自 KimiProvider。
 """
 from __future__ import annotations
 
-import json
-import time
-
-from logger import log
-
 from .base import UsageData
-from .cdp import CDPHarness, CDPError
 from .kimi import KimiProvider
 
 
@@ -33,99 +20,7 @@ class KimiTeamProvider(KimiProvider):
     PAGE_KEYWORD = "kimi.com"
     SITE_NAME = "www.kimi.com（团队空间）"
     STATS_REFERER = "https://www.kimi.com/membership/subscription?tab=quota"
-
-    def fetch(self) -> UsageData:
-        name = self.cfg.get("name") or "Kimi 团队"
-        data = UsageData(
-            provider_name=name, plan_level="团队版", fetched_at=time.time())
-
-        if self.has_direct_credentials(self.cfg):
-            result = self._fetch_http(data)
-            if result.status != "error":
-                return result
-            log(f"Kimi 团队凭证直连失败（{result.error}），尝试 CDP 兜底")
-            if not self.cfg.get("cdp_enabled", True):
-                return result
-            return self._fallback_cdp(data, result.error, self._fetch_cdp)
-
-        if self.cfg.get("cdp_enabled", True):
-            return self._fetch_cdp(data)
-
-        return self._err(data, "请在设置里点「提取凭证」，或启用 CDP 并登录 www.kimi.com")
-
-    # ---- 凭证直连模式 ----
-    @staticmethod
-    def has_direct_credentials(cfg: dict) -> bool:
-        return bool(cfg.get("refresh_token") or cfg.get("access_token"))
-
-    @classmethod
-    def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
-        """从调试 Chrome 的 localStorage 提取 access_token / refresh_token。"""
-        harness = CDPHarness(port=port, page_keyword=cls.PAGE_KEYWORD,
-                             cdp_url=cdp_url)
-        page = harness.find_page()
-        ws_url = page.get("webSocketDebuggerUrl", "")
-        result = harness.evaluate(
-            ws_url,
-            "JSON.stringify({"
-            "at: localStorage.getItem('access_token') || '',"
-            "rt: localStorage.getItem('refresh_token') || ''"
-            "})")
-        try:
-            tokens = json.loads(result.get("value") or "{}")
-        except ValueError as e:
-            raise CDPError(f"读取 localStorage 失败: {e}")
-        if not tokens.get("rt"):
-            raise CDPError(
-                "未找到 refresh_token：请先在调试 Chrome 里登录 Kimi 团队空间")
-        return {
-            "access_token": tokens.get("at") or "",
-            "refresh_token": tokens["rt"],
-        }
-
-    # ---- CDP 模式 ----
-
-    def _fetch_cdp(self, data: UsageData) -> UsageData:
-        port = int(self.cfg.get("cdp_port") or 9222)
-        harness = CDPHarness(
-            port=port,
-            page_keyword=self.PAGE_KEYWORD,
-            cdp_url=self.cfg.get("cdp_url") or "",
-            eval_timeout=30,
-        )
-
-        try:
-            page = harness.find_page()
-        except CDPError as e:
-            return self._translate_err(data, e)
-
-        ws_url = page.get("webSocketDebuggerUrl", "")
-
-        # 页面自己会用 refresh_token 保持 access_token 新鲜，直接读即可
-        try:
-            tok_result = harness.evaluate(
-                ws_url, "localStorage.getItem('access_token') || ''")
-        except CDPError as e:
-            return self._translate_err(data, e)
-
-        token = (tok_result.get("value") or "").strip()
-        if not token:
-            return self._err(
-                data, "localStorage 无 access_token（请在 CDP Chrome 里登录 Kimi 团队空间）")
-
-        payload = self._decode_jwt_payload(token)
-        js = self._build_js(token, payload)
-
-        try:
-            result = harness.evaluate(ws_url, js, await_promise=True)
-        except CDPError as e:
-            return self._translate_err(data, e)
-
-        text = result.get("value") or ""
-        log(f"Kimi 团队 CDP 原始响应: {text[:800]}")
-        if not text.strip():
-            return self._err(data, "API 返回空")
-        return self._parse_json(text, data)
+    PLAN_LEVEL = "团队版"
 
     def _parse_json(self, text: str, data: UsageData) -> UsageData:
         result = super()._parse_json(text, data)
@@ -135,13 +30,3 @@ class KimiTeamProvider(KimiProvider):
             if item.label == "订阅额度":
                 item.label = "本月窗口"
         return result
-
-    def _translate_err(self, data: UsageData, e: CDPError) -> UsageData:
-        from .cdp import CDPPageNotFound, CDPEvalError, CDPNotConnected
-        if isinstance(e, CDPPageNotFound):
-            return self._err(data, "请在 CDP Chrome 里打开 www.kimi.com 并登录团队空间")
-        if isinstance(e, CDPEvalError):
-            return self._err(data, f"API 调用失败（登录可能已过期）: {e}")
-        if isinstance(e, CDPNotConnected):
-            return self._err(data, "请先在设置里启动 CDP Chrome 并登录 Kimi")
-        return self._err(data, str(e))

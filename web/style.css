@@ -769,6 +769,14 @@ body.dock-mode .cards-container {
     overflow-y: hidden;
 }
 
+/* compact+top 卡片横排成一排，超出才换行（每排尽量一排，多了到第二排）；
+   宽度由 JS 按内容自适应，不会挤在固定窄条里叠字 */
+body.compact.top-mode .cards-container {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: hidden;
+}
+
 body.dock-mode .card {
     padding: 8px 14px;
     border-radius: 6px;

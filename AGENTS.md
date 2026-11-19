@@ -1,5 +1,70 @@
 # AGENTS.md
 
+> ## 🔴 开发维护规范（超高优先级——任何改动前必读）
+>
+> 以下每条都对应真实踩过的事故（2026-08 密集修复总结）。违反任何一条，
+> 问题会以"时好时坏、改了复发"的形态回来。
+>
+> ### 一、坐标系铁律（本项目第一事故源）
+> 1. CSS 逻辑像素 ↔ Win32 物理像素的换算**只用前端 `devicePixelRatio`**，
+>    后端永远不自猜——`GetDpiForWindow/GetDpiForSystem` 与 Chromium dpr
+>    可能差 1.25 倍（文本缩放/WebView2 raster 差异，实测 1.5 vs 1.875）。
+> 2. pywebview 的 `window.x/y/width/height` 属性是**创建时快照**，不随
+>    Win32 SetWindowPos 更新；读当前位置尺寸必须 `GetWindowRect`。
+> 3. 持久化的 geometry 统一物理像素，消费处换算回 CSS；任何新持久化
+>    数值必须注明单位（物理/css/秒/毫秒）。
+> 4. 自动化测试脚本（PIL 截图/SetCursorPos/GetWindowRect）先
+>    `SetProcessDpiAwareness(2)`，否则坐标系错位导致"测试误报"。
+>
+> ### 二、测量铁律（防反馈回路）
+> 5. 测量内容尺寸前必须解除一切容器约束（height/maxHeight/overflow/
+>    `min(--panel-width, 100vw)` 钳制/flex 拉伸），量完恢复；测量结果
+>    不允许被当前窗口尺寸污染（"窗口越大量得越大"）。
+> 6. intrinsic sizing 陷阱：`flex-basis:0`、`overflow:hidden+ellipsis`
+>    的元素在 fit-content/max-content 测量下会塌缩成 0。
+>
+> ### 三、异步与事件铁律
+> 7. 关键时序**禁用 `requestAnimationFrame`**（无焦点窗口被挂起永不返回），
+>    用同步 reflow（`void el.offsetHeight`）或 setTimeout。
+> 8. 悬浮窗按钮一律 `pointerdown`，不用 `click`（down/up 配对在窗口移动
+>    时失效＝"点两三次才生效"且改了复发）。
+> 9. 所有状态锁（防重入/dragging）必须有丢失兜底：超时解锁、
+>    `e.buttons===0` 检测、try/finally。
+> 10. WebView2 改窗口位置/尺寸后会**重派** mouseenter/mouseleave/mousemove，
+>     事件驱动状态机必须容忍重派（去重/延迟/坐标判断）。
+>
+> ### 四、状态与配置铁律
+> 11. 前端→后端**只提交用户编辑的字段，禁止整快照回传**（页面加载时的
+>     token/凭证会被后台刷新，回传即覆盖）。后端防线：`api/providers.update`
+>     拒绝凭证字段被空值覆盖。
+> 12. 配置读-改-写必须持 `config.io_lock`（save 原子但读改写窗口期会丢
+>     更新：token 轮换 vs 增删 provider 实踩）。
+> 13. **"每次重存"而非"为空才存"**（异常退出的残留值会自我延续）。
+> 14. 状态位保持正交：compact（密度）/topMode（布局）/dockMode（吸附）/
+>     dockHidden（临时可见性）各司其职，函数只动自己职责内的位；
+>     失败必须回滚到一致状态，不留"半状态"。
+> 15. 退出/关闭时保存配置，必须先重新 `config.load()` 再改
+>     （内存快照是启动时的，直接 save 会擦掉运行期全部变更）。
+> 16. 共享凭证（kimi 个人/团队同一份 localStorage token）：刷新后轮转
+>     必须**同步写给所有共享者 + 使用方 fetch 前 reload**，否则互踢 401。
+>
+> ### 五、外部依赖铁律
+> 17. 端口/地址可被其他程序抢占（Electron 抢 9222 实踩）：连接后必须
+>     验证目标身份（目标页面出现），失败给明确指引；`CDPHarness.find_page`
+>     对 127.0.0.1/[::1] 自适应是参考实现。
+> 18. 站点会改版：选择器/URL 关键字放宽匹配；凭证机制抽象成
+>     extract/refresh 两段可替换。
+> 19. **不凭单次现象下结论**（"Chrome 151 移除 origin 头"实为连到
+>     Electron）；先定位根因再改代码。
+>
+> ### 六、变更纪律
+> 20. **修 bug 不改样式**——用户认可的视觉样式（宽度/布局/grid）是冻结
+>     资产，逻辑修复与样式调整必须分开，不得夹带。
+> 21. 改窗口行为必须真机验证：SendInput 模拟点击 + 截图确认，
+>     不能只靠读代码推断"应该好了"。
+
+---
+
 桌面悬浮窗，实时显示 coding plan 的 token 用量。**pywebview** 实现（HTML/CSS/JS +
 Python 桥），支持**智谱 GLM Coding Plan（含团队版）**、**OpenCode Go**、**Kimi**、
 **小米 MiMo**、**火山 Ark**。行业类似项目（Headroom / claude-statusbar /
@@ -108,7 +173,8 @@ reset_at / note）。
   在本类实现，kimi_team 继承复用）。直连优先 token，旧 `kimi-auth` cookie
   （28 天 JWT）路径保留兼容；headers 由 `_build_headers`（JWT payload 的
   sub/device_id/ssid 注入）。CDP 兜底同样读 localStorage token。
-- `KimiTeamProvider`（继承 KimiProvider，token 链路与 `_parse_json` 复用父类）：
+  机制上个人版/团队版已统一，`KimiTeamProvider` 只剩展示层差异（referer/label）。
+- `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
   团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
   account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id；
   个人版 token 无 business_id，同一接口按 token 自动返回对应空间数据）。
@@ -171,8 +237,8 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
    `Bigmodel-Project` 加进 fetch headers（这是反爬根因，不是 WAF/`acw_sc__v2`）
 3. 从 `document.cookie` 读 `bigmodel_token_production` 加裸 `Authorization` 头
    （**不加 `Bearer`**），`credentials:'include'` 还要带上其余 cookie
-4. `websocket.create_connection` 必须传 `origin="http://127.0.0.1:<port>"` 头，
-   否则 403（CDPHarness 自动处理）
+4. `websocket.create_connection` 用 `suppress_origin=True`（不发 Origin 头），
+   对 Chrome（非浏览器客户端无 Origin 头放行）和抢占端口的 Electron 都兼容
 
 解析逻辑（`providers.zhipu.ZhipuProvider._parse_team`）已对，别改：
 `data.rankList[]` 按 `customerId==cfg.customer_id` 匹配，取不到取第一名；
@@ -199,8 +265,21 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   前端倒计时圆环按 label 推断窗口时长（5h/7d/30d）算剩余比例，无 reset_at 不显示。
 - **pywebview 跨平台**：Windows 上 `transparent=True` 在高 DPI 下会被 WebView2 裁切，
   改成 `transparent=not is_windows`，CSS 用 `body.no-transparent` 兜底非透明背景。
-- **DPI 缩放**：JS 传来的尺寸是 CSS 逻辑像素，Win32 `SetWindowPos` 要物理像素，
-  用 `api.screen.windows_dpi_scale()` 换算。`api.window._resize_windows` 是参考实现。
+- **DPI 缩放**：JS 传来的尺寸是 CSS 逻辑像素，Win32 `SetWindowPos` 要物理像素。
+  **必须用前端 `devicePixelRatio` 换算，不能用 `GetDpiForWindow`**——实测两者
+  不一致（dpr=1.875 vs GetDpiForWindow=1.5，文本缩放/WebView2 raster 差异），
+  用错会导致所有 fit/移动换算少乘 1.25（2026-08 实踩：top 模式高度不够裁行、
+  宽度只占屏幕 80%）。前端在各 resize/move API 调用时传 `window.devicePixelRatio`，
+  后端 `dpr>0` 优先。`api.screen.windows_dpi_scale()` 仅作回退。
+- **卡片模式窗口收敛的隐藏依赖**：旧代码卡片宽度收敛（420→260）其实是
+  DPI 误算的副作用（每次 fit 窗口缩 0.8 直到 260 下限），dpr 修对后该
+  "意外收敛"消失——卡片宽度由 `--panel-width`（PANEL_WIDTH=420）恒定决定。
+- **measurePanelSize 反馈循环**：dock 模式 `container{height:100vh}` + flex 拉伸
+  会让 `cards.scrollHeight` 跟随视口高度（"窗口越高量得越高"）。测量时必须
+  同时解除 container 的 height（`style.height='auto'`）。
+- **窗口无焦点时 rAF 会被挂起**：fit/moveToTop 里的 `await requestAnimationFrame`
+  可能永不返回（CDP/无焦点场景实测），需要同步 reflow（`void body.offsetHeight`）
+  或 setTimeout 替代。
 - **macOS 主线程**：Cocoa `NSWindow.setFrame_` 必须在主线程，用
   `api.screen.run_on_macos_main_thread` 同步等。`quit_app` 走 `os._exit(0)`
   否则 Cocoa 事件循环不会退。
@@ -214,9 +293,20 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   无需 Cookie/UA/Referer，`acw_sc__v2` JS 挑战从未触发。
 - **取数优先级**：`ZhipuProvider.fetch` 中 `has_direct_credentials(cfg)`（auth_token + org_id
   + project_id 三件套）为 True 时优先纯 HTTP；失败（401/空 data）且 `cdp_enabled` 时
-  回退 CDP 兜底。CDP 仅用于凭证提取和兜底，不依赖浏览器常开。WebSocket 连接必须带
-  `origin: http://127.0.0.1:<port>` 头，否则 Chrome 返回 403 Forbidden
-  （`CDPHarness` 自动处理）。
+  回退 CDP 兜底。CDP 仅用于凭证提取和兜底，不依赖浏览器常开。WebSocket 连接
+  用 `suppress_origin=True`（不发 Origin 头，Chrome 与抢占端口的 Electron 都兼容）。
+- **CDP 端口被抢占（2026-08 实踩）**：9222 是本机常用调试端口，**Electron 应用
+  （如本机"观智助手"）也会绑 127.0.0.1:9222**。此时真 Chrome 启动后 IPv4 被占会
+  退而只绑 `[::1]:9222`，而 Python requests 连 `127.0.0.1` 命中的是 Electron——
+  表现：CDP 403/"/json/new 500"/`Target.createTarget Not supported`/提取凭证打到
+  错误程序的页面。修法：`CDPHarness.find_page` 对 127.0.0.1 与 [::1] 两个候选
+  地址自适应；`launch_cdp_chrome` 启动后验证目标页面真的出现在调试端口上。
+  之前"Chrome 151 移除 --remote-allow-origins=*"是误诊（当时连的是 Electron）。
+- **设置页快照覆盖坑**：`saveProvider` 若把整个 provider 快照发回 `update_provider`，
+  快照里陈旧的 token 字段会覆盖后端刚提取/刷新的新 token（kimi 凭证曾因此"被清空"）。
+  现在 `saveProvider` 只提交用户编辑的字段，token 等后端管理字段不在表单里就不会被覆盖。
+- **Kimi 控制台路由变更**：站点已把 `/code/console` 重定向到 `/code`（SPA 内部往返跳），
+  `KimiProvider.PAGE_KEYWORD` 已放宽为 `kimi.com/code`，别改回旧路径。
 - **WebView 必须在 GUI 线程**；cookie 抓取依赖用户登录态，无法离线/无头测试，
   必须真人登录。
 - **pywebview 文档陷阱**：部分 `Screen` 对象在不同版本是 dict/对象两种形态，
@@ -290,10 +380,26 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
 QQ 风格：启用顶部模式后，鼠标离开窗口 200ms 自动滑出（露 4px 缝），
 鼠标回顶部 4px 区域窗口滑下显示。实现：
 - 前端 `setupDockAutoHide`（web/app.js）：监听 mouseleave/mouseenter/mousemove
+- **dockArmed 宽限期**：切 dock 后窗口飞到屏幕顶部，若立即 auto-hide 会
+  "点了窗口就消失"。曾尝试"鼠标首次进入窗口才 armed"，但窗口可能正好盖住
+  鼠标位置、WebView2 重派 mouseenter 导致提前 armed。最终方案：固定 3 秒
+  宽限期（`setTimeout` 后置 `dockArmed=true`），宽限期内 `setHidden(true)` 被挡
+- **pre_dock_geometry 必须每次重存且用 GetWindowRect**：pywebview 的
+  `window.x/y` 属性不随 Win32 移动更新（存的是创建时的旧值）；"为空才存"
+  会让强杀残留的错误值自我延续
+- **toggleDock 防重入 + 失败回滚**：连点/双击会让两次切换并发互踩
+  （`state.dockToggling` 挡）；moveToTop 失败时 toggleDock 必须中止，
+  否则卡进"半 dock"状态（样式 dock、位置没动）
 - mouseleave 走 200ms 延迟（避免 WebView2 改 y 后重派 mouseenter/mouseleave 死循环）
 - mousemove 用 `e.screenY < 4`（**不是** `e.clientY`）判断"接近屏幕顶部"
 - 后端 `api.set_dock_hidden(true/false)` 调 Win32 SetWindowPos 物理移动 y
 - `fitWindowOnce` 完重设 dock hidden（fit 后 h 变了 y 算错）
+
+## 设置窗口复用
+
+`api/settings.py:open_settings_window` 复用已存在的设置窗口（`show()` +
+`evaluate_js(loadConfig())` 刷新数据），避免每次重建 WebView2 冷启动白屏约 2 秒。
+用户点 X 关闭时挂 `events.closed` 清引用，下次重新创建。
 
 ## 8 方向 resize handle
 

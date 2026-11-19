@@ -11,32 +11,13 @@ import config
 from logger import log
 
 
-# 顶层模式：仅运行时记忆，不入 config（避免和 JS 端重复状态）
-_top_mode_width: Optional[int] = None
-
-
 def set_top_mode(enabled: bool) -> bool:
-    """进入 / 退出顶部条模式。清掉 _top_mode_width 让窗口从内容重新算。"""
-    global _top_mode_width
-    if not enabled:
-        _top_mode_width = None
+    """进入 / 退出顶部条模式（运行态由 api/core 的实例属性管理）。"""
     return True
-
-
-def top_mode_width() -> Optional[int]:
-    return _top_mode_width
 
 
 def set_compact(cfg: dict, compact: bool) -> bool:
-    global _top_mode_width
-    _top_mode_width = None
     cfg["compact"] = compact
-    config.save(cfg)
-    return True
-
-
-def set_dock(cfg: dict, dock: bool) -> bool:
-    cfg["dock"] = dock
     config.save(cfg)
     return True
 
@@ -113,13 +94,26 @@ _settings_window = None  # 持有 pywebview 窗口引用，防止 GC
 
 
 def open_settings_window(js_api) -> bool:
-    """打开 / 复用设置窗口。"""
+    """打开 / 复用设置窗口。
+
+    复用已有窗口避免每次重建 WebView2（冷启动白屏约 2 秒）。"""
     global _settings_window
     try:
         import webview
     except ImportError as e:
         log(f"打开设置窗口失败（pywebview 不可用）: {e}")
         return False
+
+    # 复用：窗口仍在则拉到前台显示，并刷新配置数据
+    if _settings_window is not None:
+        try:
+            _settings_window.show()
+            _settings_window.evaluate_js(
+                "typeof loadConfig === 'function' && loadConfig()")
+            log("设置窗口已复用")
+            return True
+        except Exception:  # noqa: BLE001  窗口已被销毁则重建
+            _settings_window = None
 
     current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     settings_html = os.path.join(current_dir, "web", "settings.html")
@@ -137,6 +131,16 @@ def open_settings_window(js_api) -> bool:
         on_top=True,
     )
     _set_window_icon(_settings_window, icon_path)
+
+    # 用户点 X 关掉后清引用，下次重新创建
+    def _on_closed():
+        global _settings_window
+        _settings_window = None
+
+    try:
+        _settings_window.events.closed += _on_closed
+    except (AttributeError, TypeError):
+        pass
     log("设置窗口已打开")
     return True
 

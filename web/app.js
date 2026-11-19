@@ -4,9 +4,7 @@
 const state = {
     cards: {},
     compact: false,
-    dock: false,
     topMode: false,
-    topWidth: null,
     manualWidth: null,
     onTop: true,
     refreshInterval: 60000,
@@ -15,7 +13,8 @@ const state = {
     theme: 'light',
     fitToken: 0,
     dockMode: false,
-    dockHidden: false
+    dockHidden: false,
+    dockArmed: false
 };
 
 const PANEL_WIDTH = 420;
@@ -160,17 +159,31 @@ function normalizedCompactItems(items) {
     return slots;
 }
 
+function measureContentWidth() {
+    // max-content 上下文测内容自然宽度（与当前窗口宽度无关，防反馈循环）
+    const container = document.querySelector('.container');
+    const prev = container.style.width;
+    container.style.width = 'fit-content';
+    const w = Math.ceil(container.getBoundingClientRect().width);
+    container.style.width = prev;
+    return w;
+}
+
 function desiredPanelWidth() {
     if (state.topMode) {
-        if (state.topWidth) {
-            return state.topWidth;
+        const maxW = Math.round((window.screen.availWidth || 2000) * 0.8);
+        if (state.compact) {
+            // 简单模式横排成一排：宽度按内容自适应（不再固定 620 挤压）
+            return Math.min(Math.max(measureContentWidth(), 320), maxW);
         }
-        return Math.max(window.innerWidth || PANEL_WIDTH, PANEL_WIDTH);
+        // 复杂模式 80% 屏宽（沿用旧版视觉）
+        return maxW;
     }
     if (state.manualWidth) {
         return state.manualWidth;
     }
-    return state.compact ? COMPACT_PANEL_WIDTH : PANEL_WIDTH;
+    // 卡片模式按内容自然宽度，小巧紧凑
+    return Math.max(260, measureContentWidth());
 }
 
 function applyPanelWidth() {
@@ -178,9 +191,8 @@ function applyPanelWidth() {
 }
 
 function nativeWidthForCss(cssWidth) {
-    if (state.topMode) {
-        return 0;
-    }
+    // 始终返回实际宽度：fit 同步窗口宽，内容变化（简单/复杂切换、
+    // provider 增删、label 长短）后宽度自动跟随，不留白框不裁切
     return Math.round(cssWidth);
 }
 
@@ -200,40 +212,52 @@ function measurePanelSize() {
     cards.style.maxHeight = 'none';
     cards.style.height = 'auto';
     cards.style.overflowY = 'visible';
+    // dock 模式 container 是 height:100vh，flex 会把 cards 拉伸到视口高，
+    // scrollHeight 被撑大形成"窗口越高量得越高"的反馈循环，一并解除
+    const prevContainerH = container.style.height;
+    container.style.height = 'auto';
     const cardsHeight = Math.ceil(cards.scrollHeight);
     cards.style.maxHeight = prevMaxHeight;
     cards.style.height = prevHeight;
     cards.style.overflowY = prevOverflow;
+    container.style.height = prevContainerH;
 
     const emptyHeight = elements.emptyTip.style.display === 'none' ? 0 : elements.emptyTip.scrollHeight;
     const loadingHeight = elements.loading.classList.contains('active') ? elements.loading.scrollHeight : 0;
     const height = Math.ceil(titleHeight + cardsHeight + emptyHeight + loadingHeight + WINDOW_HEIGHT_PADDING);
-    const measuredWidth = Math.round(container.getBoundingClientRect().width || cssWidth);
+    // 宽度直接用期望值 cssWidth，不能量 container 实际宽——container 的
+    // width:min(--panel-width, 100vw) 会被当前窗口钳制：简单(620)切复杂(1638)
+    // 时 100vw 还是 620，量出 620 → fit 又设 620 → 宽度放大方向死锁，
+    // 复杂内容被永久压进窄条叠字（2026-08 实踩）
     return {
-        width: nativeWidthForCss(measuredWidth),
+        width: nativeWidthForCss(cssWidth),
         height: Math.max(80, height)
     };
 }
 
 function fitWindowOnce(delay = 0, token = state.fitToken) {
     window.setTimeout(() => {
-        requestAnimationFrame(() => {
-            requestAnimationFrame(async () => {
-                if (token !== state.fitToken) {
-                    return;
-                }
-                if (!window.pywebview || !window.pywebview.api) {
-                    return;
-                }
-                const size = measurePanelSize();
-                await window.pywebview.api.resize_window_to_content(size.width, size.height);
-                // resize 后窗口真实高度变了，dock 隐藏的 y 坐标需要重新计算
-                // 否则 set_dock_hidden 用的是 fit 前的旧 h，会算错 y 导致完全隐藏
-                if (state.dockMode && state.dockHidden) {
-                    window.pywebview.api.set_dock_hidden(true);
-                }
-            });
-        });
+        (async () => {
+            if (token !== state.fitToken) {
+                return;
+            }
+            if (!window.pywebview || !window.pywebview.api) {
+                return;
+            }
+            // 强制同步 reflow 后测量：不用 rAF（窗口无焦点时 rAF 会被挂起，
+            // fit 永不执行导致高度停留在初始错误值）
+            void document.body.offsetHeight;
+            const size = measurePanelSize();
+            // dpr 必须传给后端：Chromium 渲染比例（1.875）与 GetDpiForWindow
+            // （1.5）可能不一致，后端自己猜会少乘文本缩放因子
+            await window.pywebview.api.resize_window_to_content(
+                size.width, size.height, window.devicePixelRatio || 0);
+            // resize 后窗口真实高度变了，dock 隐藏的 y 坐标需要重新计算
+            // 否则 set_dock_hidden 用的是 fit 前的旧 h，会算错 y 导致完全隐藏
+            if (state.dockMode && state.dockHidden) {
+                window.pywebview.api.set_dock_hidden(true);
+            }
+        })();
     }, delay);
 }
 
@@ -402,62 +426,63 @@ async function refresh() {
 
 // 切换简单/复杂模式
 async function toggleCompact() {
+    // compact 只是显示密度切换，与 top/dock 模式正交（CSS 有 compact.top-mode
+    // 组合规则）。不要清 topMode/dockMode——否则 dock 模式点 ⤡ 会把横条依赖的
+    // top-mode 布局摘掉，dock 布局直接崩坏（2026-08 实踩）
     state.compact = !state.compact;
-    state.topMode = false;
-    state.topWidth = null;
     state.manualWidth = null;
-    state.widthScale = 1;
     document.body.classList.toggle('compact', state.compact);
-    document.body.classList.remove('top-mode');
     applyPanelWidth();
     elements.btnMode.classList.toggle('active', state.compact);
     elements.btnMode.textContent = state.compact ? '⤢' : '⤡';
-    
+
     if (window.pywebview && window.pywebview.api) {
-        await window.pywebview.api.set_top_mode(false);
         await window.pywebview.api.set_compact(state.compact);
+    }
+    // compact 影响 items 槽位归一（normalizedCompactItems 只在 render 时生效），
+    // 立即用缓存数据重渲染，不等下次定时刷新
+    const providers = Object.values(state.cards);
+    if (providers.length) {
+        renderCards(providers);
     }
     scheduleWindowFit();
 }
 
-// 放大并移动到当前屏幕顶部
+// 放大并移动到当前屏幕顶部。返回是否成功。
 async function moveToTop() {
-    if (window.pywebview && window.pywebview.api) {
-        state.topMode = true;
-        state.topWidth = null;
-        state.manualWidth = null;
-        state.widthScale = 1;
-        applyPanelWidth();
-        document.body.classList.add('top-mode');
+    if (!window.pywebview || !window.pywebview.api) return false;
+    state.topMode = true;
+    state.manualWidth = null;
+    applyPanelWidth();
+    document.body.classList.add('top-mode');
 
-        // 等一帧让浏览器按 top-mode 布局 reflow 完再测量高度
-        await new Promise(r => requestAnimationFrame(r));
-        const size = measurePanelSize();
+    // 强制同步 reflow 再测量：窗口无焦点时 rAF 可能被节流挂起
+    // （实测 rAF 等待后 top-mode 样式未应用，量出卡片布局的错高度）
+    void document.body.offsetHeight;
+    const size = measurePanelSize();
 
-        // 顶部模式宽度固定，不随供应商数量变化（供应商上下堆叠，变的是高度）
-        const targetWidth = state.compact ? 620 : 2460;
+        // 顶部模式宽度：简单模式按内容（横排一排）；复杂模式 80% 屏宽
         const maxScreenW = window.screen.availWidth || 2000;
-        const clampedWidth = Math.min(targetWidth, maxScreenW);
+        const targetWidth = state.compact
+            ? Math.max(320, measureContentWidth())
+            : Math.round(maxScreenW * 0.8);
+        const clampedWidth = Math.min(targetWidth, Math.round(maxScreenW * 0.95));
 
-        const result = await window.pywebview.api.move_window_to_top(clampedWidth, size.height);
+        const result = await window.pywebview.api.move_window_to_top(
+            clampedWidth, size.height, window.devicePixelRatio || 0);
         const ok = typeof result === 'object' ? result.ok : result;
         elements.btnTop.classList.toggle('active', ok);
         setTimeout(() => elements.btnTop.classList.remove('active'), 700);
         if (ok) {
-            if (typeof result === 'object' && result.width) {
-                state.topWidth = result.width;
-                applyPanelWidth();
-            }
             // 延迟等 WebView2 完成重布局
             scheduleWindowFit(220);
-        } else {
-            state.topMode = false;
-            state.topWidth = null;
-            document.body.classList.remove('top-mode');
-            applyPanelWidth();
-            scheduleWindowFit(80);
+            return true;
         }
-    }
+        state.topMode = false;
+        document.body.classList.remove('top-mode');
+        applyPanelWidth();
+        scheduleWindowFit(80);
+        return false;
 }
 
 // 切换 auto-hide dock 模式（替换原"顶部模式"按钮行为）
@@ -465,23 +490,62 @@ async function moveToTop() {
 // 关闭：窗口回到原位（恢复 pre-dock geometry）
 async function toggleDock() {
     if (!window.pywebview || !window.pywebview.api) return;
+    // 防重入：切换过程有多个 await，连点/双击会让两次 toggleDock 并发互踩
+    if (state.dockToggling) {
+        // 被挡时写后端日志：区分"点击事件没到页面"（无日志）和"被锁挡住"
+        if (window.pywebview.api.log_js) {
+            window.pywebview.api.log_js('toggleDock 被防重入锁挡住');
+        }
+        return;
+    }
+    state.dockToggling = true;
+    // 兜底：bridge 调用挂起时 8 秒后强制解锁，避免永久锁死所有后续点击
+    const unlockTimer = setTimeout(() => {
+        state.dockToggling = false;
+        if (window.pywebview.api.log_js) {
+            window.pywebview.api.log_js('toggleDock 超时强制解锁');
+        }
+    }, 8000);
+    try {
+        await _toggleDockInner();
+    } finally {
+        clearTimeout(unlockTimer);
+        state.dockToggling = false;
+    }
+}
+
+async function _toggleDockInner() {
     const willEnable = !state.dockMode;
     if (willEnable) {
-        await moveToTop();
-        state.dockMode = true;
+        // dock-mode 先加：行高/字号与 top-mode 不同，测量必须在最终布局下进行，
+        // 否则初始高度按大行高算小，后面的行被裁掉
         document.body.classList.add('dock-mode');
+        const ok = await moveToTop();
+        if (!ok) {
+            // moveToTop 失败已回滚 top-mode，这里同步回滚 dock-mode，
+            // 否则会卡进"半 dock"状态（样式是 dock、位置没动、auto-hide 乱触发）
+            document.body.classList.remove('dock-mode');
+            return;
+        }
+        state.dockMode = true;
+        state.dockArmed = false;   // 等鼠标首次进入窗口后才允许 auto-hide
         document.body.classList.remove('dock-hidden');  // 初始先显示
         elements.btnTop.classList.add('active');
+        // 2 秒宽限后才允许 auto-hide，结束后无论鼠标在哪都隐藏（QQ 贴边）
+        setTimeout(() => {
+            if (state.dockArmCheck) state.dockArmCheck();
+        }, 2000);
         scheduleWindowFit(220);
     } else {
         state.dockMode = false;
+        state.dockArmed = false;
+        state.dockHidden = false;   // 不重置会在重进 dock 后被 setHidden 去重吞掉 auto-hide
         document.body.classList.remove('dock-mode');
         document.body.classList.remove('dock-hidden');
         elements.btnTop.classList.remove('active');
         // 恢复窗口到原位
         await window.pywebview.api.restore_window();
         state.topMode = false;
-        state.topWidth = null;
         state.manualWidth = null;
         document.body.classList.remove('top-mode');
         await window.pywebview.api.set_top_mode(false);
@@ -494,17 +558,31 @@ async function toggleDock() {
 // （避免 WebView2 在 set_dock_hidden 改 y 后重派 mouseenter/mouseleave
 // 造成死循环）。
 // 物理位置通过 api.set_dock_hidden(true/false) 切，CSS 只负责 cursor 指示。
+// dockArmed 武装位：切 dock 后窗口飞到屏幕顶部，若立即 auto-hide 会
+// "点了窗口就消失"。曾尝试"鼠标首次进入窗口后才 armed"，但窗口飞上去
+// 可能正好盖住鼠标位置，WebView2 重派 mouseenter 导致提前 armed。
+// 改为固定宽限期：切 dock 后 2 秒内禁止隐藏（2026-08 实踩两轮）。
 const DOCK_HIDE_MARGIN = 20;  // 鼠标离开内容后多少像素内不触发隐藏
 function setupDockAutoHide() {
     let leaveTimer = null;
     const setHidden = (hidden) => {
         if (!state.dockMode) return;
+        if (hidden && !state.dockArmed) return;        // 宽限期内不允许隐藏
+        // 只有窗口贴在屏幕顶部边缘时才允许隐藏（QQ 贴边逻辑）：
+        // 窗口被拖离顶部后 auto-hide 停用，拖回顶部自动恢复
+        if (hidden && window.screenY > 4) return;
         if (state.dockHidden === hidden) return;       // 去重
         state.dockHidden = hidden;
         document.body.classList.toggle('dock-hidden', hidden);
         if (window.pywebview && window.pywebview.api) {
             window.pywebview.api.set_dock_hidden(hidden);
         }
+    };
+    // 宽限期结束后武装并立即隐藏：切换到顶部模式后无论鼠标在哪都要收
+    // （QQ 贴边行为，用户明确要求）；鼠标回顶部 4px 缝再滑出
+    state.dockArmCheck = () => {
+        state.dockArmed = true;
+        setHidden(true);
     };
     document.addEventListener('mouseenter', () => {
         if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null; }
@@ -624,6 +702,12 @@ function startResize(e, dir) {
 
 function onResizeMove(e) {
     if (!resizeState.dragging) return;
+    // mouseup 丢失兜底：鼠标在 WebView 外松开/事件被吞时 buttons 已归零，
+    // 立即结束拖拽，否则 dragging 卡死导致 auto-hide 检测永久失效
+    if (e.buttons === 0) {
+        onResizeEnd();
+        return;
+    }
     const dx = e.screenX - resizeState.startX;
     const dy = e.screenY - resizeState.startY;
     const d = resizeState.dir;
@@ -645,9 +729,10 @@ function onResizeMove(e) {
     applyPanelWidth();
 
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.resize_window_to_content(newW, newH);
+        const dpr = window.devicePixelRatio || 0;
+        window.pywebview.api.resize_window_to_content(newW, newH, dpr);
         if (newX !== resizeState.startWinX || newY !== resizeState.startWinY) {
-            window.pywebview.api.move_window(newX, newY);
+            window.pywebview.api.move_window(newX, newY, dpr);
         }
     }
 }
@@ -692,13 +777,20 @@ async function init() {
         document.body.classList.add('no-transparent');
     }
     
-    // 绑定按钮事件
-    elements.btnRefresh.addEventListener('click', refresh);
-    elements.btnTop.addEventListener('click', toggleDock);
-    elements.btnMode.addEventListener('click', toggleCompact);
-    elements.btnPin.addEventListener('click', toggleOnTop);
-    elements.btnSettings.addEventListener('click', openSettings);
-    elements.btnClose.addEventListener('click', closeWindow);
+    // 绑定按钮事件：用 pointerdown 而不是 click——click 要求 down/up 落在
+    // 同一元素，悬浮窗按下后窗口可能移动（fit 收敛/auto-hide 滑动/dock 切换），
+    // mouseup 错位 click 被吞，表现为"点两三次才生效"且修了反复出现。
+    // pointerdown 按下即触发，不依赖配对，机制上根治。
+    const onPress = (el, fn) => el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        fn(e);
+    });
+    onPress(elements.btnRefresh, refresh);
+    onPress(elements.btnTop, toggleDock);
+    onPress(elements.btnMode, toggleCompact);
+    onPress(elements.btnPin, toggleOnTop);
+    onPress(elements.btnSettings, openSettings);
+    onPress(elements.btnClose, closeWindow);
 
     // 绑定缩放手柄
     initResizeHandles();
@@ -718,7 +810,6 @@ async function init() {
             state.topMode = false;
             state.dockMode = false;
             state.dockHidden = false;
-            state.topWidth = null;
             state.onTop = cfg.always_on_top !== false;
             state.opacity = cfg.opacity || 0.92;
             applyWindowOpacity(state.opacity);

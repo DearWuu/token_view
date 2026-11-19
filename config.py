@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,13 @@ def config_dir() -> Path:
 
 def config_path() -> Path:
     return config_dir() / "config.json"
+
+
+# 配置读-改-写的全局互斥锁：save 本身原子（临时文件+rename），但
+# load→改→save 的窗口期会丢更新（凭证轮换 vs 增删 provider 实踩）。
+# 所有"读后改"的写路径必须持这把锁（api/providers、api/core、
+# providers/* 的 token 落盘）。
+io_lock = threading.RLock()
 
 
 def load() -> dict:
@@ -113,7 +121,8 @@ def new_provider(ptype: str) -> dict:
     elif ptype == "kimi":
         base.update({
             "cookie": "",
-            # 新登录流程（2026-11 起）：localStorage token，不再种 kimi-auth cookie
+            # 2026-08 改版：登录态在 localStorage 的 access_token/refresh_token，
+            # access_token 约 15 分钟有效，过期用 refresh_token 自动换
             "access_token": "",
             "refresh_token": "",
             "name": "Kimi",

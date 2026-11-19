@@ -108,9 +108,20 @@ def main():
     # cfg 里如果之前存过 geometry，优先用
     saved_geom = cfg.get('geometry') if isinstance(cfg.get('geometry'), list) else None
     if saved_geom and len(saved_geom) == 4:
-        init_x, init_y, init_w, init_h = saved_geom
-        init_w = max(260, int(init_w or 420))
-        init_h = max(80, int(init_h or 400))
+        # geometry 统一存物理像素（window.py 各写入点），消费时换算回 CSS
+        scale = 1.0
+        if is_windows:
+            try:
+                import ctypes
+                dpi = ctypes.windll.user32.GetDpiForSystem()
+                if dpi > 0:
+                    scale = dpi / 96.0
+            except OSError:
+                pass
+        init_x = int(saved_geom[0] / scale)
+        init_y = int(saved_geom[1] / scale)
+        init_w = max(260, int(saved_geom[2] / scale))
+        init_h = max(80, int(saved_geom[3] / scale))
     else:
         init_w, init_h = 420, 400
         margin = 80
@@ -179,10 +190,11 @@ def main():
     def on_closed():
         try:
             compact = window.evaluate_js('state.compact') or False
-            dock = window.evaluate_js('state.dock') or False
-            cfg['compact'] = compact
-            cfg['dock'] = dock
-            config.save(cfg)
+            # 必须从磁盘读最新配置再改——main 的 cfg 是启动时的快照，
+            # 直接 save 会把运行期变更（新 token/新 provider/geometry）全部覆盖
+            latest = config.load()
+            latest['compact'] = compact
+            config.save(latest)
         except Exception as e:
             log(f"保存配置失败: {e}")
     
@@ -219,10 +231,14 @@ def main():
                     GWL_EXSTYLE = -20
                     WS_EX_TOOLWINDOW = 0x00000080
                     WS_EX_APPWINDOW = 0x00040000
+                    # 悬浮工具窗不抢焦点：不加 NOACTIVATE 时，窗口平时无焦点，
+                    # 第一次点击会被 Windows 吃掉用于激活窗口（click 到不了页面），
+                    # 表现为所有按钮都要点两次才生效
+                    WS_EX_NOACTIVATE = 0x08000000
                     user32 = ctypes.windll.user32
                     ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                    # 加 TOOLWINDOW，同时移除 APPWINDOW（两者互斥）
-                    new_style = (ex_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+                    # 加 TOOLWINDOW + NOACTIVATE，同时移除 APPWINDOW（两者互斥）
+                    new_style = (ex_style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
                     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
                     # 刷新窗口框架让样式生效
                     SWP_FRAMECHANGED = 0x0020
@@ -231,7 +247,7 @@ def main():
                     SWP_NOZORDER = 0x0004
                     user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
                                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
-                    log("窗口已设为 TOOLWINDOW（不在任务栏显示）")
+                    log("窗口已设为 TOOLWINDOW + NOACTIVATE（不在任务栏显示，点击不抢焦点）")
             except Exception as e:
                 log(f"设置 TOOLWINDOW 失败: {e}")
 

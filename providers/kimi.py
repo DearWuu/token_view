@@ -1,14 +1,19 @@
 """Kimi（月之暗面）会员/订阅额度 Provider。
 
 取数方式（按优先级）：
-  1. 凭证直连（推荐）：localStorage access_token / refresh_token（2026-11 起
-     新登录流程不再种 kimi-auth cookie，改用 token，与团队空间同机制），
-     access_token 约 15 分钟有效，过期用 refresh_token 调 auth.kimi.com 换新；
-     旧配置里的 kimi-auth cookie（28 天 JWT）路径保留兼容
+  1. 凭证直连（推荐）：localStorage 里的 access_token / refresh_token 提取后，
+     access_token 过期（约 15 分钟）就用 refresh_token 调 auth.kimi.com 换新，
+     纯 HTTP 不开浏览器
   2. CDP 模式：连接已登录调试 Chrome，页面内读 localStorage access_token 后 fetch（兜底）
 
+2026-08 站点改版：个人版登录态已从 kimi-auth cookie（HttpOnly，约 28 天）
+迁移到 localStorage 的 access_token/refresh_token（与团队版同一套 account 网关
+机制），旧 cookie 模式仅作遗留兜底。
+
 接口：
-  POST /apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats
+  POST https://auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken
+      {"refreshToken": "..."} -> {"accessToken": "...", "refreshToken": "..."}
+  POST https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats
 
 返回包含：
   - ratelimitCode5h / ratelimitCode7d：5h / 7d 速率窗口已用比例
@@ -28,25 +33,27 @@ import config
 from logger import log
 
 from .base import BaseProvider, UsageData, UsageItem, BROWSER_UA
-from .cdp import CDPHarness, CDPError, extract_domain_cookies, cookie_header
+from .cdp import CDPHarness, CDPError
 
 
 class KimiProvider(BaseProvider):
     """Kimi 订阅额度与速率窗口用量。"""
 
     API_PATH = "/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats"
-    PAGE_KEYWORD = "kimi.com/code/console"
-    SITE_NAME = "www.kimi.com/code/console"
+    # 站点已把 /code/console 重定向到 /code，keyword 放宽到 kimi.com/code
+    PAGE_KEYWORD = "kimi.com/code"
+    SITE_NAME = "www.kimi.com/code"
+    STATS_REFERER = "https://www.kimi.com/code"
+    PLAN_LEVEL = "订阅额度"
     REFRESH_URL = ("https://auth.kimi.com/api/"
                    "account.gateway.v1.AuthService/RefreshToken")
-    STATS_REFERER = "https://www.kimi.com/code/console"
 
     def fetch(self) -> UsageData:
         name = self.cfg.get("name") or "Kimi"
         data = UsageData(
-            provider_name=name, plan_level="订阅额度", fetched_at=time.time())
+            provider_name=name, plan_level=self.PLAN_LEVEL, fetched_at=time.time())
 
-        # 优先凭证直连：token/cookie 已提取时纯 HTTP，不开浏览器
+        # 优先凭证直连：token 已提取时纯 HTTP，不开浏览器
         if self.has_direct_credentials(self.cfg):
             result = self._fetch_http(data)
             if result.status != "error":
@@ -61,58 +68,39 @@ class KimiProvider(BaseProvider):
 
         return self._err(data, "请在设置里点「提取凭证」，或启用 CDP 并登录 www.kimi.com")
 
-    # ---- 凭证直连模式 ----
+    # ---- 凭证直连模式（token） ----
     @staticmethod
     def has_direct_credentials(cfg: dict) -> bool:
-        return bool(cfg.get("refresh_token") or cfg.get("access_token")
-                    or "kimi-auth=" in (cfg.get("cookie") or ""))
+        if cfg.get("refresh_token") or cfg.get("access_token"):
+            return True
+        # 旧 cookie 模式（站点已弃用，遗留兜底）
+        return "kimi-auth=" in (cfg.get("cookie") or "")
 
     @classmethod
     def extract_credentials(cls, port: int = 9222, cdp_url: str = "") -> dict:
-        """提取 cookie + localStorage token（新登录流程只写后者）。"""
-        page, cookies = extract_domain_cookies(
-            port, cdp_url, cls.PAGE_KEYWORD, "kimi.com")
+        """从调试 Chrome 的 localStorage 提取 access_token / refresh_token。"""
         harness = CDPHarness(port=port, page_keyword=cls.PAGE_KEYWORD,
-                             cdp_url=cdp_url, eval_timeout=30)
+                             cdp_url=cdp_url)
+        page = harness.find_page()
+        ws_url = page.get("webSocketDebuggerUrl", "")
         result = harness.evaluate(
-            page["webSocketDebuggerUrl"],
+            ws_url,
             "JSON.stringify({"
             "at: localStorage.getItem('access_token') || '',"
-            "rt: localStorage.getItem('refresh_token') || ''})")
-        tokens = json.loads(result.get("value") or "{}")
-        out = {"cookie": cookie_header(cookies)}
-        if tokens.get("rt"):
-            out["access_token"] = tokens.get("at") or ""
-            out["refresh_token"] = tokens["rt"]
-        if not out.get("refresh_token") and not any(
-                c.get("name") == "kimi-auth" for c in cookies):
-            raise CDPError("未找到登录凭证：请先在调试 Chrome 里登录 Kimi")
-        return out
-
-    def _fetch_http(self, data: UsageData) -> UsageData:
-        if self.cfg.get("access_token") or self.cfg.get("refresh_token"):
-            return self._fetch_token_http(data)
-        cookie = self.cfg["cookie"].strip()
-        m = re.search(r"(?:^|;\s*)kimi-auth=([^;]+)", cookie)
-        if not m:
-            return self._err(data, "cookie 中缺少 kimi-auth（请重新提取凭证）")
-        token = m.group(1)
-        payload = self._decode_jwt_payload(token)
-        headers = self._build_headers(token, payload)
-        headers["User-Agent"] = BROWSER_UA
-        headers["Origin"] = "https://www.kimi.com"
-        headers["Referer"] = self.STATS_REFERER
-        headers["Cookie"] = cookie
+            "rt: localStorage.getItem('refresh_token') || ''"
+            "})")
         try:
-            r = requests.post("https://www.kimi.com" + self.API_PATH,
-                              headers=headers, json={}, timeout=20)
-        except requests.RequestException as e:
-            return self._err(data, f"网络错误: {e}")
-        wrapper = json.dumps({
-            "status": r.status_code, "statusText": r.reason, "body": r.text})
-        return self._parse_json(wrapper, data)
+            tokens = json.loads(result.get("value") or "{}")
+        except ValueError as e:
+            raise CDPError(f"读取 localStorage 失败: {e}")
+        if not tokens.get("rt"):
+            raise CDPError(
+                "未找到 refresh_token：请先在调试 Chrome 里登录 Kimi")
+        return {
+            "access_token": tokens.get("at") or "",
+            "refresh_token": tokens["rt"],
+        }
 
-    # ---- localStorage token 直连（个人版/团队空间共用） ----
     def _access_token_valid(self) -> bool:
         exp = self._decode_jwt_payload(
             self.cfg.get("access_token") or "").get("exp") or 0
@@ -144,29 +132,61 @@ class KimiProvider(BaseProvider):
         self.cfg["access_token"] = at
         if j.get("refreshToken"):
             self.cfg["refresh_token"] = j["refreshToken"]
-        self._persist_tokens()
+        self._persist_tokens(old_rt=rt)
         log("Kimi access_token 已刷新")
         return ""
 
-    def _persist_tokens(self) -> None:
-        """刷新后的 token 落盘（access_token 只有 15 分钟，重启后要能接着刷）。"""
+    def _persist_tokens(self, old_rt: str = "") -> None:
+        """刷新后的 token 落盘（access_token 只有约 15 分钟，重启后要能接着刷）。
+
+        持 config.io_lock 完成读-改-写，避免与其他写路径（增删 provider、
+        设置保存）在窗口期互相覆盖。
+        同时把新 token 同步给共享同一份 refresh_token 的 kimi 系 provider
+        （个人版/团队版共用 localStorage 同一对 token，不同步会互踢）。
+        """
         try:
-            cfg = config.load()
-            for p in cfg.get("providers", []):
-                if p.get("id") == self.cfg.get("id"):
-                    p["access_token"] = self.cfg.get("access_token", "")
-                    p["refresh_token"] = self.cfg.get("refresh_token", "")
-                    break
-            config.save(cfg)
+            with config.io_lock:
+                cfg = config.load()
+                for p in cfg.get("providers", []):
+                    if p.get("type") not in ("kimi", "kimi_team"):
+                        continue
+                    if p.get("id") == self.cfg.get("id") or \
+                            (old_rt and p.get("refresh_token") == old_rt):
+                        p["access_token"] = self.cfg.get("access_token", "")
+                        p["refresh_token"] = self.cfg.get("refresh_token", "")
+                config.save(cfg)
         except OSError as e:
             log(f"Kimi token 落盘失败: {e}")
 
-    def _fetch_token_http(self, data: UsageData) -> UsageData:
-        if not self._access_token_valid():
-            err = self._refresh_access_token()
-            if err:
-                return self._err(data, err)
-        return self._fetch_stats_http(data, retried=False)
+    def _fetch_http(self, data: UsageData) -> UsageData:
+        self._reload_tokens()
+        if self.cfg.get("access_token") or self.cfg.get("refresh_token"):
+            if not self._access_token_valid():
+                err = self._refresh_access_token()
+                if err:
+                    return self._err(data, err)
+            return self._fetch_stats_http(data, retried=False)
+        # 旧 cookie 模式（站点已弃用）
+        return self._fetch_http_cookie(data)
+
+    def _reload_tokens(self) -> None:
+        """从磁盘同步最新 token。
+
+        kimi 个人版/团队版共用 localStorage 里同一对 token，任一 provider
+        刷新都会轮转 refresh_token 并落盘——另一个 provider 内存里的旧 rt
+        会被服务端作废（互踢 401 循环的根因）。fetch 前 reload 保证手上
+        永远是最新的。
+        """
+        try:
+            with config.io_lock:
+                cfg = config.load()
+            for p in cfg.get("providers", []):
+                if p.get("id") == self.cfg.get("id"):
+                    self.cfg["access_token"] = p.get("access_token", "")
+                    self.cfg["refresh_token"] = p.get("refresh_token", "")
+                    break
+        except OSError:
+            pass
 
     def _fetch_stats_http(self, data: UsageData, retried: bool) -> UsageData:
         token = self.cfg["access_token"].strip()
@@ -190,6 +210,28 @@ class KimiProvider(BaseProvider):
             "status": r.status_code, "statusText": r.reason, "body": r.text})
         return self._parse_json(wrapper, data)
 
+    def _fetch_http_cookie(self, data: UsageData) -> UsageData:
+        """旧 kimi-auth cookie 直连（2026-08 站点改版后仅作遗留兜底）。"""
+        cookie = self.cfg["cookie"].strip()
+        m = re.search(r"(?:^|;\s*)kimi-auth=([^;]+)", cookie)
+        if not m:
+            return self._err(data, "cookie 中缺少 kimi-auth（请重新「提取凭证」）")
+        token = m.group(1)
+        payload = self._decode_jwt_payload(token)
+        headers = self._build_headers(token, payload)
+        headers["User-Agent"] = BROWSER_UA
+        headers["Origin"] = "https://www.kimi.com"
+        headers["Referer"] = self.STATS_REFERER
+        headers["Cookie"] = cookie
+        try:
+            r = requests.post("https://www.kimi.com" + self.API_PATH,
+                              headers=headers, json={}, timeout=20)
+        except requests.RequestException as e:
+            return self._err(data, f"网络错误: {e}")
+        wrapper = json.dumps({
+            "status": r.status_code, "statusText": r.reason, "body": r.text})
+        return self._parse_json(wrapper, data)
+
     # ---- CDP 模式 ----
 
     def _fetch_cdp(self, data: UsageData) -> UsageData:
@@ -208,8 +250,7 @@ class KimiProvider(BaseProvider):
 
         ws_url = page.get("webSocketDebuggerUrl", "")
 
-        # 新登录流程用 localStorage token（页面自己会用 refresh_token 保鲜），
-        # 旧的 kimi-auth cookie 已不签发，不再走 Network.getAllCookies。
+        # 页面自己会用 refresh_token 保持 access_token 新鲜，直接读即可
         try:
             tok_result = harness.evaluate(
                 ws_url, "localStorage.getItem('access_token') || ''")
@@ -260,11 +301,7 @@ class KimiProvider(BaseProvider):
         return headers
 
     def _build_js(self, token: str, payload: dict) -> str:
-        """构造在页面上下文执行的 fetch JS，返回 {status, statusText, body}。
-
-        token 与 payload 已在外部从 CDP cookie 解析好，直接注入 JS，
-        避免 HttpOnly cookie 无法被 document.cookie 读取的问题。
-        """
+        """构造在页面上下文执行的 fetch JS，返回 {status, statusText, body}。"""
         return (
             "(async()=>{"
             "const h=" + json.dumps(self._build_headers(token, payload)) + ";"

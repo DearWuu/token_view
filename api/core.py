@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import platform
-import threading
 from typing import Any, Optional
 
 import config
@@ -23,9 +22,8 @@ class Api:
 
     def __init__(self):
         self.cfg = config.load()
-        self._lock = threading.Lock()
         self.window: Optional[Any] = None   # main.py 在启动后注入
-        self._top_mode_width: Optional[int] = None  # 与 settings_api 共享运行时状态
+        self._top_mode_width: Optional[int] = None  # top 模式标志（fit 时居中用）
         # 启动时同步 state.json：清掉 cfg 里已不存在的 provider 条目，
         # 兜底任何来源（删除/手动改 config）造成的 state 与 cfg 不一致
         known_ids = {p.get("id") for p in self.cfg.get("providers", [])
@@ -116,7 +114,7 @@ class Api:
 
     def save_config(self, updates: dict) -> bool:
         try:
-            with self._lock:
+            with config.io_lock:
                 self.cfg.update(updates)
                 config.save(self.cfg)
             if "opacity" in updates:
@@ -139,6 +137,28 @@ class Api:
     # ===================================================================
     # Provider CRUD
     # ===================================================================
+
+    def log_js(self, msg: str) -> bool:
+        """前端诊断日志通道：排查"点击没反应"时区分事件是否到达页面。"""
+        log(f"[JS] {msg}")
+        return True
+
+    def get_cursor_pos(self) -> dict:
+        """返回鼠标物理像素坐标 {x, y}（GetCursorPos）。
+
+        前端宽限期结束时主动判断鼠标是否已在窗口外——鼠标静止时没有任何
+        mouse 事件，auto-hide 不会触发（用户反馈"要点一下框里才隐藏"）。
+        """
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                pt = wintypes.POINT()
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                return {"x": int(pt.x), "y": int(pt.y)}
+            except OSError:
+                pass
+        return {"x": -1, "y": -1}
 
     def add_provider(self, ptype: str) -> dict:
         new_p = providers_api.add(self.cfg, ptype)
@@ -244,10 +264,6 @@ class Api:
                 log(f"通知前端主题切换失败: {e}")
         return True
 
-    def set_geometry(self, x: int, y: int, w: int, h: int) -> bool:
-        window_helper.save_geometry(self.cfg, x, y, w, h)
-        return True
-
     def get_geometry(self):
         return window_helper.get_geometry(self.cfg)
 
@@ -260,25 +276,30 @@ class Api:
         settings_api.set_top_mode(enabled)
         return True
 
-    def resize_window_to_content(self, width: int, height: int) -> dict:
+    def resize_window_to_content(self, width: int, height: int,
+                                 dpr: float = 0) -> dict:
         return window_helper.resize_to_content(
-            self.window, self._top_mode_width, width, height)
+            self.window, self._top_mode_width, width, height, dpr=dpr)
 
     def resize_window(self, x: int = -1, y: int = -1,
-                      width: int = 0, height: int = 0) -> dict:
+                      width: int = 0, height: int = 0,
+                      dpr: float = 0) -> dict:
         """用户拖 8 方向 resize handle 时由前端调用，CSS 逻辑像素。
 
         x/y = -1 表示该方向不动；>=0 时连位置一起改（拖左/上/左上/左下 时）。
+        dpr：前端 devicePixelRatio，CSS→物理换算基准。
         """
         return window_helper.user_resize(
-            self.window, x, y, width, height)
+            self.window, x, y, width, height, dpr=dpr)
 
-    def move_window(self, x: int, y: int) -> bool:
-        """只改窗口位置，不改大小。"""
-        return window_helper.move_window(self.window, x, y)
+    def move_window(self, x: int, y: int, dpr: float = 0) -> bool:
+        """只改窗口位置，不改大小。dpr 为前端 devicePixelRatio。"""
+        return window_helper.move_window(self.window, x, y, dpr=dpr)
 
-    def move_window_to_top(self, width: int = 0, height: int = 0) -> dict:
-        result = window_helper.move_to_top(self.window, self.cfg, width, height)
+    def move_window_to_top(self, width: int = 0, height: int = 0,
+                           dpr: float = 0) -> dict:
+        result = window_helper.move_to_top(
+            self.window, self.cfg, width, height, dpr=dpr)
         if result.get("ok") and result.get("width"):
             self._top_mode_width = result["width"]
         return result
@@ -296,11 +317,9 @@ class Api:
     # ===================================================================
 
     def set_compact(self, compact: bool) -> bool:
-        self._top_mode_width = None
+        # 不再清 _top_mode_width：前端 fit 已全权决定宽度，
+        # 清了反而丢 top 模式标志导致 fit 后窗口不重新居中
         return settings_api.set_compact(self.cfg, compact)
-
-    def set_dock(self, dock: bool) -> bool:
-        return settings_api.set_dock(self.cfg, dock)
 
     def set_refresh_interval(self, seconds: int) -> bool:
         return settings_api.set_refresh_interval(self.cfg, seconds)
