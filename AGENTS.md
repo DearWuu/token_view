@@ -174,6 +174,12 @@ reset_at / note）。
   （28 天 JWT）路径保留兼容；headers 由 `_build_headers`（JWT payload 的
   sub/device_id/ssid 注入）。CDP 兜底同样读 localStorage token。
   机制上个人版/团队版已统一，`KimiTeamProvider` 只剩展示层差异（referer/label）。
+  **rt 失效自愈**：`RefreshToken` 返回 401（rt 被浏览器轮转作废）时，若开了
+  CDP 就走 `_recapture_tokens_cdp` 从页面 localStorage 重捕一份活的 token 顶上，
+  成功后用新 token 继续原流程；重捕到的 token 身份（sub/business_id）与
+  cfg 记录的 `token_sub`/`token_biz` 不一致时拒绝写入（页面切到了别的空间），
+  提示「页面登录身份与该 provider 不匹配，请在页面切换到对应空间后重新提取凭证」。
+  身份标记在用量拉取成功后写入 config（`_record_identity`）。
 - `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
   团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
   account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id；
@@ -307,6 +313,14 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   现在 `saveProvider` 只提交用户编辑的字段，token 等后端管理字段不在表单里就不会被覆盖。
 - **Kimi 控制台路由变更**：站点已把 `/code/console` 重定向到 `/code`（SPA 内部往返跳），
   `KimiProvider.PAGE_KEYWORD` 已放宽为 `kimi.com/code`，别改回旧路径。
+- **Kimi rt 轮转与自愈**：refresh_token 会轮转，浏览器页面与程序共用同一族 rt，
+  页面轮转后程序手里的 rt 超出宽限窗口就作废（`RefreshToken` 返回 401
+  `unauthenticated: Session expired`）。对策两层：① 程序内部互踢——刷新后
+  同步写给所有共享者（`_persist_tokens(old_rt=...)`）+ fetch 前 reload
+  （`_reload_tokens`）；② 程序对浏览器——rt 作废时从页面 localStorage 重捕
+  （`_recapture_tokens_cdp`，只读不轮转）。**重捕必须做身份校验**：页面切到
+  团队空间时重捕到的是带 `business_id` 的团队 token，写进个人版 provider 会
+  查错空间的用量，cfg 的 `token_sub`/`token_biz` 就是为此存在。
 - **WebView 必须在 GUI 线程**；cookie 抓取依赖用户登录态，无法离线/无头测试，
   必须真人登录。
 - **pywebview 文档陷阱**：部分 `Screen` 对象在不同版本是 dict/对象两种形态，
