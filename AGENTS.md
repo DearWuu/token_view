@@ -179,7 +179,7 @@ reset_at / note）。
   成功后用新 token 继续原流程；重捕到的 token 身份（sub/business_id）与
   cfg 记录的 `token_sub`/`token_biz` 不一致时拒绝写入（页面切到了别的空间），
   提示「页面登录身份与该 provider 不匹配，请在页面切换到对应空间后重新提取凭证」。
-  身份标记在用量拉取成功后写入 config（`_record_identity`）。
+  锚定仅在为空时由首次成功写入，此后不可变（防漂移）。
 - `KimiTeamProvider`（继承 KimiProvider，复用 `_build_headers`/`_parse_json`）：
   团队空间用量接口与个人版同为 `GetSubscriptionStats`，但 Bearer 必须是
   account 网关签发的短期 access token（iss=account，约 15 分钟，带 business_id；
@@ -321,6 +321,10 @@ JS 挑战 cookie `acw_sc__v2` 从未出现（每次响应种的 `acw_tc` 只是�
   （`_recapture_tokens_cdp`，只读不轮转）。**重捕必须做身份校验**：页面切到
   团队空间时重捕到的是带 `business_id` 的团队 token，写进个人版 provider 会
   查错空间的用量，cfg 的 `token_sub`/`token_biz` 就是为此存在。
+  **CDP 兜底与重捕同样受身份校验约束**（`_fetch_cdp` 同样校验页面 token，
+  错位就报错不取数）；**未锚定的 provider（`token_sub` 为空）不允许自动重捕**，
+  必须先在设置页点「提取凭证」建立锚点，否则会把页面所在空间错锚成 provider
+  身份，之后真正的身份反而被拒（无法自愈）。
 - **WebView 必须在 GUI 线程**；cookie 抓取依赖用户登录态，无法离线/无头测试，
   必须真人登录。
 - **pywebview 文档陷阱**：部分 `Screen` 对象在不同版本是 dict/对象两种形态，

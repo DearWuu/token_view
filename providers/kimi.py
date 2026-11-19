@@ -48,6 +48,15 @@ class KimiProvider(BaseProvider):
     REFRESH_URL = ("https://auth.kimi.com/api/"
                    "account.gateway.v1.AuthService/RefreshToken")
 
+    # 身份错位提示：重捕与 CDP 兜底共用同一措辞，便于用户识别
+    IDENTITY_MISMATCH_HINT = ("页面登录身份与该 provider 不匹配，"
+                              "请在页面切换到对应空间后重新提取凭证")
+    # 直连路径的错位提示：复用同一措辞，只把主语换成"手上的凭证"
+    DIRECT_IDENTITY_MISMATCH_HINT = ("凭证身份与该 provider 不匹配："
+                                     + IDENTITY_MISMATCH_HINT)
+    # 未锚定提示：自动重捕不允许把页面身份直接当成自己的锚点
+    UNANCHORED_HINT = "该 provider 尚未锚定登录身份，请先在设置页点「提取凭证」"
+
     def fetch(self) -> UsageData:
         name = self.cfg.get("name") or "Kimi"
         data = UsageData(
@@ -67,6 +76,22 @@ class KimiProvider(BaseProvider):
             return self._fetch_cdp(data)
 
         return self._err(data, "请在设置里点「提取凭证」，或启用 CDP 并登录 www.kimi.com")
+
+    def _fallback_cdp(self, data: UsageData, http_error: str,
+                      cdp_fetch) -> UsageData:
+        """直连失败回退 CDP；身份错位时保留 CDP 的错位提示。
+
+        基类实现会用直连错误覆盖 CDP 错误，但"页面空间错位"比"直连失败"
+        更可操作（把页面切到对应空间即可），不能被直连错误盖掉。
+        """
+        data = self._reset(data)
+        cdp_result = cdp_fetch(data)
+        if cdp_result.status == "error":
+            if self.IDENTITY_MISMATCH_HINT in (cdp_result.error or ""):
+                return cdp_result
+            if http_error:
+                return self._err(data, http_error)
+        return cdp_result
 
     # ---- 凭证直连模式（token） ----
     @staticmethod
@@ -161,7 +186,13 @@ class KimiProvider(BaseProvider):
         身份校验：cfg 记录了 token_sub/token_biz（首次 fetch 成功后写入），
         页面切到别的空间（个人版 vs 团队空间）时重捕到的 token 身份会变，
         这时不能写进来——否则 provider 会拿别人的 token 查错空间的用量。
+
+        未锚定（token_sub 为空）时一律拒绝自动写入：页面在哪个空间就锚哪个
+        空间，页面恰好在别的空间时会把 provider 锚到错身份，之后真正的身份
+        反而被拒（无法自愈）。锚定只能由用户主动「提取凭证」建立。
         """
+        if not (self.cfg.get("token_sub") or "").strip():
+            return f"重捕凭证失败：{self.UNANCHORED_HINT}"
         port = int(self.cfg.get("cdp_port") or 9222)
         harness = CDPHarness(
             port=port,
@@ -189,8 +220,7 @@ class KimiProvider(BaseProvider):
                     "（请在调试 Chrome 里登录 Kimi）")
         payload = self._decode_jwt_payload(at or rt)
         if self._identity_mismatch(payload):
-            return ("页面登录身份与该 provider 不匹配，"
-                    "请在页面切换到对应空间后重新提取凭证")
+            return self.IDENTITY_MISMATCH_HINT
         self.cfg["access_token"] = at
         self.cfg["refresh_token"] = rt
         self._record_identity(payload)
@@ -213,19 +243,25 @@ class KimiProvider(BaseProvider):
         return (self.cfg.get("token_biz") or "").strip() != new_biz
 
     def _record_identity(self, payload: dict) -> bool:
-        """记录 token 身份（sub / business_id），返回是否发生变化。
+        """记录 token 身份（sub / business_id），返回是否写入。
 
-        token_biz 一律写入（个人版为空串、团队版为 business_id），
+        锚定语义：一经建立不可变。只有 cfg 里 token_sub 还空着（从未锚定）
+        时才写入；已有锚定一律不覆盖——否则一次成功的直连就能把个人版的
+        锚点刷成团队身份，人工纠正完下一轮又漂回去。
+
+        token_biz 与 sub 一起写（个人版为空串、团队版为 business_id），
         这样"页面切到另一个空间"能被 biz 差异识别出来。
         """
         sub = (payload.get("sub") or "").strip()
         biz = (payload.get("business_id") or "").strip()
-        changed = (self.cfg.get("token_sub") or "").strip() != sub or \
-                  (self.cfg.get("token_biz") or "").strip() != biz
-        if sub:
-            self.cfg["token_sub"] = sub
+        if (self.cfg.get("token_sub") or "").strip():
+            # 已锚定：不可变，不再被后续拉取改写
+            return False
+        if not sub:
+            return False
+        self.cfg["token_sub"] = sub
         self.cfg["token_biz"] = biz
-        return changed
+        return True
 
     def _persist_tokens(self, old_rt: str = "") -> None:
         """刷新后的 token 落盘（access_token 只有约 15 分钟，重启后要能接着刷）。
@@ -234,20 +270,34 @@ class KimiProvider(BaseProvider):
         设置保存）在窗口期互相覆盖。
         同时把新 token 同步给共享同一份 refresh_token 的 kimi 系 provider
         （个人版/团队版共用 localStorage 同一对 token，不同步会互踢）。
+
+        身份锚点（token_sub/token_biz）只在本 provider 尚未锚定时随 token
+        一起同步：已锚定的 provider 锚的是自己的空间，被同族 provider 覆盖
+        就是锚定漂移（个人版被刷成团队身份），所以一律不覆盖。
         """
         try:
             with config.io_lock:
                 cfg = config.load()
+                sub = self.cfg.get("token_sub") or ""
+                biz = self.cfg.get("token_biz") or ""
                 for p in cfg.get("providers", []):
                     if p.get("type") not in ("kimi", "kimi_team"):
                         continue
-                    if p.get("id") == self.cfg.get("id") or \
-                            (old_rt and p.get("refresh_token") == old_rt):
-                        p["access_token"] = self.cfg.get("access_token", "")
-                        p["refresh_token"] = self.cfg.get("refresh_token", "")
-                        # 身份标记：重捕时用来判断页面空间与本 provider 是否匹配
-                        p["token_sub"] = self.cfg.get("token_sub", "")
-                        p["token_biz"] = self.cfg.get("token_biz", "")
+                    is_self = p.get("id") == self.cfg.get("id")
+                    if not (is_self or
+                            (old_rt and p.get("refresh_token") == old_rt)):
+                        continue
+                    p["access_token"] = self.cfg.get("access_token", "")
+                    p["refresh_token"] = self.cfg.get("refresh_token", "")
+                    # 身份标记：重捕时用来判断页面空间与本 provider 是否匹配
+                    if is_self:
+                        if sub:
+                            p["token_sub"] = sub
+                            p["token_biz"] = biz
+                    elif not (p.get("token_sub") or "").strip():
+                        # 对方还没锚定过：可以继承本 provider 的身份标记
+                        p["token_sub"] = sub
+                        p["token_biz"] = biz
                 config.save(cfg)
         except OSError as e:
             log(f"Kimi token 落盘失败: {e}")
@@ -289,6 +339,12 @@ class KimiProvider(BaseProvider):
     def _fetch_stats_http(self, data: UsageData, retried: bool) -> UsageData:
         token = self.cfg["access_token"].strip()
         payload = self._decode_jwt_payload(token)
+        # 直连前先核对 token 身份：个人版与团队版共用同一接口，接口只看
+        # token 不看 provider，拿到别的空间的 token 也会照常返回数据，
+        # 于是个人版面板会一直显示团队空间的用量。校验放在函数入口，
+        # 401 刷新后重试（重新调用本函数）也会再校验一次新 token。
+        if self._identity_mismatch(payload):
+            return self._err(data, self.DIRECT_IDENTITY_MISMATCH_HINT)
         headers = self._build_headers(token, payload)
         headers["User-Agent"] = BROWSER_UA
         headers["Origin"] = "https://www.kimi.com"
@@ -365,6 +421,9 @@ class KimiProvider(BaseProvider):
                 data, "localStorage 无 access_token（请在 CDP Chrome 里登录 Kimi）")
 
         payload = self._decode_jwt_payload(token)
+        if self._identity_mismatch(payload):
+            # 页面切到了别的空间：拿它的 token 查回来的数据是错空间的
+            return self._err(data, f"CDP 兜底：{self.IDENTITY_MISMATCH_HINT}")
         js = self._build_js(token, payload)
 
         try:
