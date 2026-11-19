@@ -125,6 +125,10 @@ def new_provider(ptype: str) -> dict:
             # access_token 约 15 分钟有效，过期用 refresh_token 自动换
             "access_token": "",
             "refresh_token": "",
+            # token 身份标记（sub / business_id）：rt 失效后从页面重捕时
+            # 用来判断页面登录的空间与本 provider 是否一致
+            "token_sub": "",
+            "token_biz": "",
             "name": "Kimi",
             "cdp_enabled": True,
             "cdp_port": 9222,
@@ -135,6 +139,8 @@ def new_provider(ptype: str) -> dict:
             # 团队空间：access_token 约 15 分钟有效，过期用 refresh_token 自动换
             "access_token": "",
             "refresh_token": "",
+            "token_sub": "",
+            "token_biz": "",
             "name": "Kimi 团队",
             "cdp_enabled": True,
             "cdp_port": 9222,

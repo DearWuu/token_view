@@ -3,7 +3,10 @@
 取数方式（按优先级）：
   1. 凭证直连（推荐）：auth_token + org_id + project_id 已提取时，
      纯 HTTP 请求 sub-account-rank，不开浏览器（实测无反爬，
-     缺 Bigmodel-* header 才会返回空 data）
+     缺 Bigmodel-* header 才会返回空 data）。
+     sub-account-rank 仅企业主账号可访问；普通成员（返回
+     "仅企业主账号可访问成员排行榜"）自动降级 quota/limit?type=2
+     （浏览器"我的用量"页同源接口，percentage/nextResetTime 齐全）
   2. CDP 模式：连接已登录调试 Chrome，在页面上下文 fetch（凭证直连失败时兜底）
   3. API Key（个人版，/api/monitor/usage/quota/limit）
 
@@ -127,7 +130,12 @@ class ZhipuProvider(BaseProvider):
         }
 
     def _fetch_team_http(self, data: UsageData) -> UsageData:
-        """纯 HTTP 直连 sub-account-rank（凭证已提取，无需浏览器）。"""
+        """纯 HTTP 直连（凭证已提取，无需浏览器）。
+
+        sub-account-rank 仅企业主账号可访问；普通成员（返回
+        "仅企业主账号可访问成员排行榜"）自动降级 quota/limit?type=2——
+        与浏览器"我的用量"页同源，percentage/nextResetTime 一次拿齐。
+        """
         headers = {
             "Accept": "application/json",
             "Authorization": self.cfg["auth_token"].strip(),
@@ -142,22 +150,35 @@ class ZhipuProvider(BaseProvider):
             "endTime": now.strftime("%Y-%m-%d") + " 23:59:59",
             "pageNum": 1, "pageSize": 20, "keyword": "",
         }
-        resets = self._fetch_quota_resets_http(headers)
-        parse = (lambda d, data: self._parse_team(d, data, resets)) if resets else self._parse_team
-        return self._get(self.TEAM_RANK_URL, headers, data, params, parse)
+        quota_j, _ = self._get_json(self.QUOTA_LIMIT_URL, headers, {"type": 2})
+        rank_j, rank_err = self._get_json(self.TEAM_RANK_URL, headers, params)
+        if rank_j and rank_j.get("success") and rank_j.get("data"):
+            resets = self._parse_quota_resets(quota_j or {})
+            self._parse_team(rank_j["data"], data, resets)
+            return data
+        quota_d = (quota_j or {}).get("data") or {}
+        if quota_d.get("limits"):
+            reason = rank_err or (rank_j or {}).get("msg") or "排行榜不可用"
+            log(f"智谱 sub-account-rank 不可用（{reason}），降级「我的用量」")
+            self._parse_limits(quota_d, data, team=True)
+            return data
+        return self._err(data, (rank_j or {}).get("msg") or rank_err
+                         or "接口返回空（凭证可能已失效）")
 
-    def _fetch_quota_resets_http(self, headers: dict) -> dict:
-        """调 quota/limit?type=2 拿各窗口 nextResetTime → {label: reset_at}。
-
-        失败返回空 dict（不阻塞主流程，只是没有重置倒计时）。
-        """
+    @staticmethod
+    def _get_json(url, headers, params=None):
+        """GET → (json, None) 或 (None, 错误消息)。"""
         try:
-            r = requests.get(self.QUOTA_LIMIT_URL, headers=headers,
-                             params={"type": 2}, timeout=15)
-            return self._parse_quota_resets(r.json())
-        except Exception as e:  # noqa: BLE001
-            log(f"智谱 quota/limit 获取重置时间失败: {e}")
-            return {}
+            r = requests.get(url, headers=dict(headers or {}),
+                             params=params, timeout=15)
+        except requests.RequestException as e:
+            return None, f"网络错误: {e}"
+        if r.status_code >= 400:
+            return None, f"HTTP {r.status_code}（凭证可能已过期，请重新提取）"
+        try:
+            return r.json(), None
+        except ValueError:
+            return None, f"非 JSON 响应（HTTP {r.status_code}）"
 
     @staticmethod
     def _parse_quota_resets(j: dict) -> dict:
@@ -234,16 +255,22 @@ class ZhipuProvider(BaseProvider):
             j = json.loads(payload.get("rank") or "{}")
         except ValueError as e:
             return self._err(data, f"接口返回非 JSON: {e}")
-        if not j.get("success") or not j.get("data"):
-            return self._err(data, j.get("msg") or "接口返回空（登录可能已过期）")
-
-        resets = {}
         try:
-            resets = self._parse_quota_resets(json.loads(payload.get("quota") or "{}"))
+            quota_j = json.loads(payload.get("quota") or "{}")
         except ValueError:
-            pass
-        self._parse_team(j["data"], data, resets)
-        return data
+            quota_j = {}
+
+        if j.get("success") and j.get("data"):
+            resets = self._parse_quota_resets(quota_j)
+            self._parse_team(j["data"], data, resets)
+            return data
+        # 普通成员无排行榜权限（"仅企业主账号可访问成员排行榜"）→ 我的用量
+        quota_d = quota_j.get("data") or {}
+        if quota_d.get("limits"):
+            log(f"智谱 sub-account-rank 不可用（{j.get('msg') or '空 data'}），降级「我的用量」")
+            self._parse_limits(quota_d, data, team=True)
+            return data
+        return self._err(data, j.get("msg") or "接口返回空（登录可能已过期）")
 
     def _translate_cdp_error(self, e: CDPError) -> str:
         from .cdp import CDPNotConnected, CDPPageNotFound, CDPEvalError
@@ -312,10 +339,14 @@ class ZhipuProvider(BaseProvider):
         if not data.items:
             data.status = "empty"
 
-    @staticmethod
-    def _parse_limits(d, data: UsageData) -> None:
-        """个人版 limits[] 解析。"""
-        data.plan_level = (d.get("level") or "GLM").upper()
+    def _parse_limits(self, d, data: UsageData, team: bool = False) -> None:
+        """quota/limit 的 limits[] 解析。
+
+        个人版与团队版「我的用量」同构（后者 sub-account-rank 仅企业主
+        可访问，普通成员降级此接口）；team=True 时 label/plan_level 走团队语义。
+        """
+        level = (d.get("level") or ("团队" if team else "GLM")).upper()
+        data.plan_level = f"团队·{level}" if team else level
         for lim in d.get("limits", []) or []:
             t = lim.get("type")
             pct = float(lim.get("percentage") or 0)
@@ -334,6 +365,11 @@ class ZhipuProvider(BaseProvider):
                         if isinstance(cur, (int, float))
                         and isinstance(total, (int, float))
                         and total else "")
-                data.items.append(UsageItem("MCP 工具调用", pct, reset_at, note))
+                data.items.append(UsageItem("MCP 月度" if team else "MCP 工具调用",
+                                            pct, reset_at, note))
+        # 接口把 TIME_LIMIT 排最前，统一按 5h → 每周 → MCP 月度 展示
+        order = ["5h 窗口", "每周窗口"]
+        data.items.sort(key=lambda i: order.index(i.label)
+                        if i.label in order else len(order))
         if not data.items:
             data.status = "empty"

@@ -30,17 +30,35 @@ def test_opencode_cred_requires_cookie_and_wsid():
     assert cls.has_direct_credentials(cfg)
 
 
-def test_kimi_cred_requires_token():
+def test_kimi_cred_requires_kimi_auth_in_cookie():
     cls = providers.provider_class("kimi")
     cfg = config.new_provider("kimi")
     assert not cls.has_direct_credentials(cfg)
-    # 旧 cookie 模式（站点已弃用）仍认
+    cfg["cookie"] = "theme=light"
+    assert not cls.has_direct_credentials(cfg)
     cfg["cookie"] = "theme=light; kimi-auth=tok123"
     assert cls.has_direct_credentials(cfg)
-    # 新 token 模式
+    # 新登录流程：localStorage token 也算直连凭证（不再依赖 cookie）
     cfg2 = config.new_provider("kimi")
     cfg2["refresh_token"] = "rt"
     assert cls.has_direct_credentials(cfg2)
+
+
+def test_kimi_token_path_refreshes_when_expired(monkeypatch):
+    """个人版 token 路径：access_token 过期自动 refresh（与团队版同一链路）。"""
+    import time
+    from providers.kimi import KimiProvider
+    cfg = config.new_provider("kimi")
+    cfg["access_token"] = _jwt(time.time() - 10)
+    cfg["refresh_token"] = "rt"
+    calls = []
+    monkeypatch.setattr(KimiProvider, "_refresh_access_token",
+                        lambda self: calls.append("refresh") or "")
+    monkeypatch.setattr(KimiProvider, "_fetch_stats_http",
+                        lambda self, d, retried=False: _ok_data())
+    data = KimiProvider(cfg)._fetch_http(UsageData(provider_name="k"))
+    assert data.status == "ok"
+    assert calls == ["refresh"]
 
 
 def test_mimo_volcengine_cred_only_needs_cookie():
@@ -125,6 +143,87 @@ def test_zhipu_fetch_cdp_fail_returns_http_error(monkeypatch):
     assert "CDP" not in data.error and "Chrome" not in data.error
 
 
+# ---------------------------------------------------------------------------
+# zhipu 团队版普通成员：sub-account-rank 无权限 → 降级「我的用量」
+# ---------------------------------------------------------------------------
+
+_QUOTA_MEMBER = {
+    "limits": [
+        {"type": "TIME_LIMIT", "unit": 5, "usage": 4000, "currentValue": 0,
+         "percentage": 0, "nextResetTime": 1796006263998},
+        {"type": "TOKENS_LIMIT", "unit": 3, "percentage": 3,
+         "nextResetTime": 1793602169076},
+        {"type": "TOKENS_LIMIT", "unit": 6, "percentage": 1,
+         "nextResetTime": 1794108221991},
+    ],
+    "level": "max",
+}
+
+_RANK_DENIED = {"code": 500, "msg": "仅企业主账号可访问成员排行榜",
+                "success": False}
+
+
+def test_zhipu_member_falls_back_to_my_usage(monkeypatch):
+    """普通成员无排行榜权限：降级 quota/limit?type=2 的 limits（2026-11 实测结构）。"""
+    from providers.zhipu import ZhipuProvider
+    cfg = config.new_provider("zhipu")
+    cfg.update({"auth_token": "t", "org_id": "o", "project_id": "p"})
+
+    def fake_get_json(url, headers, params=None):
+        assert "sub-account-rank" in url or "quota/limit" in url
+        if "quota/limit" in url:
+            return {"success": True, "data": _QUOTA_MEMBER}, None
+        return _RANK_DENIED, None
+
+    monkeypatch.setattr(ZhipuProvider, "_get_json",
+                        staticmethod(fake_get_json))
+    data = ZhipuProvider(cfg)._fetch_team_http(
+        providers.UsageData(provider_name="z"))
+    assert data.status == "ok"
+    by_label = {i.label: i for i in data.items}
+    assert by_label["5h 窗口"].used_percent == 3
+    assert by_label["每周窗口"].used_percent == 1
+    assert by_label["MCP 月度"].used_percent == 0
+    # limits 自带 nextResetTime，降级路径无需再拼 resets
+    assert by_label["5h 窗口"].reset_at == 1793602169076 / 1000
+    assert by_label["每周窗口"].reset_at == 1794108221991 / 1000
+    assert data.plan_level == "团队·MAX"
+
+
+def test_zhipu_member_cdp_path_falls_back_to_my_usage():
+    """CDP 兜底路径同样降级：rank 拒绝 + quota 可用 → 我的用量。"""
+    from providers.zhipu import ZhipuProvider
+    p = ZhipuProvider({})
+    data = providers.UsageData(provider_name="z")
+    quota = {"success": True, "data": _QUOTA_MEMBER}
+    # 模拟 _fetch_team_cdp 内部对 CDP 返回文本的解析分支
+    quota_d = quota.get("data") or {}
+    assert quota_d.get("limits"), "应识别可用 quota 并降级"
+    p._parse_limits(quota_d, data, team=True)
+    assert data.status == "ok"
+    # 接口原始顺序 MCP 在前，解析后统一 5h → 每周 → MCP 月度（MCP 显示在最右）
+    assert [i.label for i in data.items] == ["5h 窗口", "每周窗口", "MCP 月度"]
+
+
+def test_zhipu_both_fail_reports_rank_msg(monkeypatch):
+    """quota 与 rank 都拿不到数据 → 报 rank 的业务错误信息。"""
+    from providers.zhipu import ZhipuProvider
+    cfg = config.new_provider("zhipu")
+    cfg.update({"auth_token": "t", "org_id": "o", "project_id": "p"})
+
+    def fake_get_json(url, headers, params=None):
+        if "quota/limit" in url:
+            return {"success": False, "msg": "登录失效"}, None
+        return _RANK_DENIED, None
+
+    monkeypatch.setattr(ZhipuProvider, "_get_json",
+                        staticmethod(fake_get_json))
+    data = ZhipuProvider(cfg)._fetch_team_http(
+        providers.UsageData(provider_name="z"))
+    assert data.status == "error"
+    assert "企业主" in data.error or "登录" in data.error
+
+
 def test_mimo_fetch_without_cred_and_cdp_gives_guidance():
     from providers.mimo import MimoProvider
     cfg = config.new_provider("mimo")
@@ -200,11 +299,11 @@ def test_kimi_build_headers_injects_jwt_claims():
     assert "x-traffic-id" not in h2
 
 
-def test_kimi_fetch_http_cookie_mode_requires_kimi_auth():
+def test_kimi_fetch_http_missing_kimi_auth():
     from providers.kimi import KimiProvider
     cfg = config.new_provider("kimi")
     cfg["cookie"] = "theme=light"
-    data = KimiProvider(cfg)._fetch_http_cookie(UsageData(provider_name="k"))
+    data = KimiProvider(cfg)._fetch_http(UsageData(provider_name="k"))
     assert data.status == "error"
     assert "kimi-auth" in data.error
 

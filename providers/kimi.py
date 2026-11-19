@@ -106,8 +106,13 @@ class KimiProvider(BaseProvider):
             self.cfg.get("access_token") or "").get("exp") or 0
         return exp - time.time() > 60
 
-    def _refresh_access_token(self) -> str:
-        """用 refresh_token 换新 access_token，成功返回 ""，失败返回错误信息。"""
+    def _refresh_access_token(self, allow_recapture: bool = True) -> str:
+        """用 refresh_token 换新 access_token，成功返回 ""，失败返回错误信息。
+
+        refresh_token 会轮转，浏览器页面与程序共用同一族 token：页面轮转后
+        程序手里的 rt 超出宽限窗口就作废（服务端返回 401）。此时若开了 CDP，
+        从页面 localStorage 重捕一份活的 token 顶上（_recapture_tokens_cdp）。
+        """
         rt = (self.cfg.get("refresh_token") or "").strip()
         if not rt:
             return "缺少 refresh_token（请在设置里重新「提取凭证」）"
@@ -121,6 +126,16 @@ class KimiProvider(BaseProvider):
         except requests.RequestException as e:
             return f"刷新 token 网络错误: {e}"
         if r.status_code != 200:
+            if r.status_code == 401 and allow_recapture \
+                    and self.cfg.get("cdp_enabled", True):
+                log("Kimi refresh_token 已失效（HTTP 401），尝试从页面重捕凭证")
+                err = self._recapture_tokens_cdp(old_rt=rt)
+                if err:
+                    return f"{err}；刷新 token 失败 HTTP {r.status_code}: {r.text[:120]}"
+                if self._access_token_valid():
+                    return ""
+                # 页面里的 access_token 也过期了，用重捕的 rt 再换一次（不再重捕）
+                return self._refresh_access_token(allow_recapture=False)
             return f"刷新 token 失败 HTTP {r.status_code}: {r.text[:200]}"
         try:
             j = json.loads(r.text)
@@ -132,9 +147,85 @@ class KimiProvider(BaseProvider):
         self.cfg["access_token"] = at
         if j.get("refreshToken"):
             self.cfg["refresh_token"] = j["refreshToken"]
+        self._record_identity(self._decode_jwt_payload(at))
         self._persist_tokens(old_rt=rt)
         log("Kimi access_token 已刷新")
         return ""
+
+    def _recapture_tokens_cdp(self, old_rt: str = "") -> str:
+        """从调试 Chrome 页面重新捕获 localStorage 里的 token。
+
+        页面那份 token 始终是活的（浏览器自己会刷新），程序里的 rt 作废后
+        直接搬过来续命。成功返回 ""，失败返回错误描述。
+
+        身份校验：cfg 记录了 token_sub/token_biz（首次 fetch 成功后写入），
+        页面切到别的空间（个人版 vs 团队空间）时重捕到的 token 身份会变，
+        这时不能写进来——否则 provider 会拿别人的 token 查错空间的用量。
+        """
+        port = int(self.cfg.get("cdp_port") or 9222)
+        harness = CDPHarness(
+            port=port,
+            page_keyword=self.PAGE_KEYWORD,
+            cdp_url=self.cfg.get("cdp_url") or "",
+            eval_timeout=30,
+        )
+        try:
+            page = harness.find_page()
+            result = harness.evaluate(
+                page.get("webSocketDebuggerUrl", ""),
+                "JSON.stringify({"
+                "at: localStorage.getItem('access_token') || '',"
+                "rt: localStorage.getItem('refresh_token') || ''})")
+        except CDPError as e:
+            return f"重捕凭证失败：{e}"
+        try:
+            tokens = json.loads(result.get("value") or "{}")
+        except ValueError as e:
+            return f"重捕凭证返回非 JSON：{e}"
+        at = (tokens.get("at") or "").strip()
+        rt = (tokens.get("rt") or "").strip()
+        if not rt:
+            return ("重捕凭证失败：页面 localStorage 里没有 refresh_token"
+                    "（请在调试 Chrome 里登录 Kimi）")
+        payload = self._decode_jwt_payload(at or rt)
+        if self._identity_mismatch(payload):
+            return ("页面登录身份与该 provider 不匹配，"
+                    "请在页面切换到对应空间后重新提取凭证")
+        self.cfg["access_token"] = at
+        self.cfg["refresh_token"] = rt
+        self._record_identity(payload)
+        self._persist_tokens(old_rt=old_rt)
+        log("Kimi 凭证已从页面重捕")
+        return ""
+
+    def _identity_mismatch(self, payload: dict) -> bool:
+        """重捕到的 token 身份与本 provider 记录的是否不一致。"""
+        cfg_sub = (self.cfg.get("token_sub") or "").strip()
+        if not cfg_sub:
+            # 还没记录过身份（首次使用），不拦
+            return False
+        new_sub = (payload.get("sub") or "").strip()
+        if new_sub and new_sub != cfg_sub:
+            return True
+        if "token_biz" not in self.cfg:
+            return False
+        new_biz = (payload.get("business_id") or "").strip()
+        return (self.cfg.get("token_biz") or "").strip() != new_biz
+
+    def _record_identity(self, payload: dict) -> bool:
+        """记录 token 身份（sub / business_id），返回是否发生变化。
+
+        token_biz 一律写入（个人版为空串、团队版为 business_id），
+        这样"页面切到另一个空间"能被 biz 差异识别出来。
+        """
+        sub = (payload.get("sub") or "").strip()
+        biz = (payload.get("business_id") or "").strip()
+        changed = (self.cfg.get("token_sub") or "").strip() != sub or \
+                  (self.cfg.get("token_biz") or "").strip() != biz
+        if sub:
+            self.cfg["token_sub"] = sub
+        self.cfg["token_biz"] = biz
+        return changed
 
     def _persist_tokens(self, old_rt: str = "") -> None:
         """刷新后的 token 落盘（access_token 只有约 15 分钟，重启后要能接着刷）。
@@ -154,6 +245,9 @@ class KimiProvider(BaseProvider):
                             (old_rt and p.get("refresh_token") == old_rt):
                         p["access_token"] = self.cfg.get("access_token", "")
                         p["refresh_token"] = self.cfg.get("refresh_token", "")
+                        # 身份标记：重捕时用来判断页面空间与本 provider 是否匹配
+                        p["token_sub"] = self.cfg.get("token_sub", "")
+                        p["token_biz"] = self.cfg.get("token_biz", "")
                 config.save(cfg)
         except OSError as e:
             log(f"Kimi token 落盘失败: {e}")
@@ -184,6 +278,10 @@ class KimiProvider(BaseProvider):
                 if p.get("id") == self.cfg.get("id"):
                     self.cfg["access_token"] = p.get("access_token", "")
                     self.cfg["refresh_token"] = p.get("refresh_token", "")
+                    # 身份标记一并同步：磁盘上的更准，避免用过期的身份误判重捕
+                    if "token_sub" in p:
+                        self.cfg["token_sub"] = p.get("token_sub", "")
+                        self.cfg["token_biz"] = p.get("token_biz", "")
                     break
         except OSError:
             pass
@@ -208,7 +306,11 @@ class KimiProvider(BaseProvider):
             return self._fetch_stats_http(data, retried=True)
         wrapper = json.dumps({
             "status": r.status_code, "statusText": r.reason, "body": r.text})
-        return self._parse_json(wrapper, data)
+        result = self._parse_json(wrapper, data)
+        if result.status == "ok" and self._record_identity(payload):
+            # 首次成功才落盘身份标记，供下次重捕时校验页面空间
+            self._persist_tokens()
+        return result
 
     def _fetch_http_cookie(self, data: UsageData) -> UsageData:
         """旧 kimi-auth cookie 直连（2026-08 站点改版后仅作遗留兜底）。"""
