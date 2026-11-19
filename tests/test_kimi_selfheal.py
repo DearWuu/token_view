@@ -105,8 +105,13 @@ def test_refresh_401_recaptures_from_page(monkeypatch):
     assert persisted == ["old-rt"], "落盘时应带上旧 rt 以同步同族 provider"
 
 
-def test_recapture_persists_identity(monkeypatch):
-    """重捕成功后身份标记写入 cfg（供下次重捕做空间校验）。"""
+def test_recapture_unanchored_refuses_to_anchor(monkeypatch):
+    """未锚定的 provider 不再自动重捕——否则会把页面所在空间锚成 provider 身份。
+
+    页面恰好在别的空间时，自动重捕会把错身份 token + 错锚定一起写入，
+    之后真正的身份反而被锚定拒绝（无法自愈）。锚定只能由用户主动
+    「提取凭证」+ 首次 fetch 成功建立。
+    """
     from providers.kimi import KimiProvider
     cfg = _cfg(token_sub="", token_biz="")
     new_at = _jwt({"exp": time.time() + 3600, "sub": "sub-z"})
@@ -114,9 +119,13 @@ def test_recapture_persists_identity(monkeypatch):
     monkeypatch.setattr(KimiProvider, "_persist_tokens",
                         lambda self, old_rt="": None)
 
-    assert KimiProvider(cfg)._recapture_tokens_cdp() == ""
-    assert cfg["token_sub"] == "sub-z"
+    err = KimiProvider(cfg)._recapture_tokens_cdp()
+
+    assert "尚未锚定" in err, f"未锚定时应拒绝并引导提取凭证，实际：{err}"
+    assert cfg["token_sub"] == "", "未锚定时不得写入身份标记"
     assert cfg["token_biz"] == ""
+    assert cfg["refresh_token"] == "old-rt", "未锚定时不得覆盖 refresh_token"
+    assert cfg["access_token"] != new_at, "未锚定时不得覆盖 access_token"
 
 
 def test_refresh_401_without_cdp_does_not_recapture(monkeypatch):
